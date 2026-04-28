@@ -66,7 +66,7 @@ export class NexoraClient {
 
     const result = await this.get<Array<{ id: string; code: string }>>(
       '/projects',
-      { search: this.projectCode, limit: '50' },
+      { limit: '50' },
     );
     const projects = Array.isArray(result) ? result : [];
     const match = projects.find(

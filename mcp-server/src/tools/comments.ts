@@ -89,14 +89,18 @@ export function registerCommentTools(server: any, client: NexoraClient): void {
       title: 'Update Comment',
       description: 'Update the content of a comment.',
       inputSchema: {
+        display_id: z.string().describe('Work item display ID (e.g., PM-42)'),
         comment_id: z.string().describe('Comment UUID'),
         content: z.string().describe('New comment content'),
       },
     },
-    async ({ comment_id, content }: { comment_id: string; content: string }) => {
+    async ({ display_id, comment_id, content }: { display_id: string; comment_id: string; content: string }) => {
       try {
+        const projectId = await client.requireProjectId();
+        const itemUuid = await client.resolveDisplayId(display_id, projectId);
+
         const comment = await client.patch<Comment>(
-          `/comments/${encodeURIComponent(comment_id)}`,
+          client.workItemsPath(projectId, itemUuid, 'comments', comment_id),
           { content },
         );
         return toolResult(`Comment updated:\n${formatComment(comment)}`);
@@ -113,12 +117,18 @@ export function registerCommentTools(server: any, client: NexoraClient): void {
       title: 'Delete Comment',
       description: 'Delete a comment.',
       inputSchema: {
+        display_id: z.string().describe('Work item display ID (e.g., PM-42)'),
         comment_id: z.string().describe('Comment UUID'),
       },
     },
-    async ({ comment_id }: { comment_id: string }) => {
+    async ({ display_id, comment_id }: { display_id: string; comment_id: string }) => {
       try {
-        await client.delete(`/comments/${encodeURIComponent(comment_id)}`);
+        const projectId = await client.requireProjectId();
+        const itemUuid = await client.resolveDisplayId(display_id, projectId);
+
+        await client.delete(
+          client.workItemsPath(projectId, itemUuid, 'comments', comment_id),
+        );
         return toolResult(`Comment ${comment_id} deleted.`);
       } catch (error) {
         return errorResult(error);

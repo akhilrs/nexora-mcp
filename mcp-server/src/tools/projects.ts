@@ -41,7 +41,7 @@ export function registerProjectTools(server: any, client: NexoraClient): void {
           return toolResult('No project configured. Set NEXORA_PROJECT_CODE or use nexora_project_switch.', true);
         }
 
-        const projects = await client.get<Project[]>('/projects', { search: code, limit: '50' });
+        const projects = await client.get<Project[]>('/projects', { limit: '50' });
         const match = projects.find(
           (p) => typeof p.code === 'string' && p.code.toLowerCase() === code.toLowerCase(),
         );

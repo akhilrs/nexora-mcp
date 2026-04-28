@@ -50,13 +50,15 @@ function createServer(): McpServer {
 
         if (projectCode) {
           try {
-            const projects = await client.get<{ items: Array<{ id: string; name: string; code: string; status: string }> }>(
+            const projects = await client.get<Array<{ id: string; name: string; code: string; status: string }>>(
               '/projects',
-              { search: projectCode, limit: '1' },
+              { limit: '50' },
             );
-            if (projects.items?.length > 0) {
-              const p = projects.items[0];
-              projectInfo = `${p.code} — ${p.name} (${p.status})`;
+            const match = projects.find(
+              (p) => typeof p.code === 'string' && p.code.toLowerCase() === projectCode.toLowerCase(),
+            );
+            if (match) {
+              projectInfo = `${match.code} — ${match.name} (${match.status})`;
             } else {
               projectInfo = `${projectCode} (not found)`;
             }

@@ -1,0 +1,24 @@
+{
+  "name": "nexora-mcp",
+  "owner": {
+    "name": "Akhil RS",
+    "url": "https://github.com/akhilrs"
+  },
+  "metadata": {
+    "description": "Nexora project management plugin for Claude Code"
+  },
+  "plugins": [
+    {
+      "name": "nexora",
+      "source": {
+        "source": "github",
+        "repo": "akhilrs/nexora-mcp"
+      },
+      "description": "AI-native project management — work items, dependencies, comments, time tracking, and search powered by Nexora HRM.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Akhil RS"
+      }
+    }
+  ]
+}

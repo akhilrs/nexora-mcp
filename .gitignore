@@ -1,7 +1,9 @@
 node_modules/
-dist/
-*.js
 *.d.ts
 *.js.map
-!esbuild.config.js
 .env
+
+# Ignore source-level JS but keep built dist
+*.js
+!esbuild.config.js
+!mcp-server/dist/index.js

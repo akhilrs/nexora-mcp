@@ -1,19 +1,23 @@
 {
   "name": "nexora",
-  "description": "Nexora HRM — Project Management agent integration. Manage work items, dependencies, comments, time tracking, and projects via MCP tools.",
+  "description": "AI-native project management for Claude Code. Create and manage work items, track dependencies, add comments, log time, and search across your Nexora projects — all from the terminal.",
   "version": "0.1.0",
   "author": {
-    "name": "Nexora",
-    "url": "https://github.com/akhilrs/nexora-mcp"
+    "name": "Akhil RS",
+    "url": "https://github.com/akhilrs"
   },
   "repository": "https://github.com/akhilrs/nexora-mcp",
   "license": "MIT",
+  "homepage": "https://github.com/akhilrs/nexora-mcp",
   "keywords": [
     "project-management",
     "work-items",
+    "task-tracking",
+    "dependencies",
     "time-tracking",
-    "task-management",
-    "hrm"
+    "hrm",
+    "mcp-server",
+    "ai-workflow"
   ],
   "mcpServers": {
     "nexora": {
