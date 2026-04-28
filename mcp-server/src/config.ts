@@ -4,8 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { parse as parseToml } from 'smol-toml';
 import { z } from 'zod';
 
-const TOML_FILENAME = '.nexora.toml';
-const LEGACY_FILENAME = '.nexora.properties';
+const CONFIG_FILENAME = '.nexora.toml';
 
 const ConfigSchema = z.object({
   apiUrl: z
@@ -22,19 +21,16 @@ const ConfigSchema = z.object({
 export type NexoraConfig = z.infer<typeof ConfigSchema>;
 
 /**
- * Walk up from startDir looking for a config file (like .git discovery).
- * Tries .nexora.toml first, then .nexora.properties for backwards compat.
+ * Walk up from startDir looking for .nexora.toml (like .git discovery).
+ * Stops at filesystem root or home directory.
  */
-function findConfigFile(startDir: string): { path: string; format: 'toml' | 'properties' } | null {
+function findConfigFile(startDir: string): string | null {
   const home = homedir();
   let dir = resolve(startDir);
 
   for (let depth = 0; depth < 50; depth++) {
-    const tomlCandidate = join(dir, TOML_FILENAME);
-    if (existsSync(tomlCandidate)) return { path: tomlCandidate, format: 'toml' };
-
-    const propsCandidate = join(dir, LEGACY_FILENAME);
-    if (existsSync(propsCandidate)) return { path: propsCandidate, format: 'properties' };
+    const candidate = join(dir, CONFIG_FILENAME);
+    if (existsSync(candidate)) return candidate;
 
     const parent = dirname(dir);
     if (parent === dir || dir === home) break;
@@ -81,34 +77,6 @@ function loadTomlConfig(filePath: string): Record<string, string | undefined> {
   }
 }
 
-/**
- * Parse a legacy .nexora.properties file (key=value per line).
- */
-function loadPropertiesConfig(filePath: string): Record<string, string | undefined> {
-  try {
-    const content = readFileSync(filePath, 'utf-8');
-    const props: Record<string, string> = {};
-    for (const line of content.split(/\r?\n/)) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith('#')) continue;
-      const eqIdx = trimmed.indexOf('=');
-      if (eqIdx === -1) continue;
-      const key = trimmed.slice(0, eqIdx).trim();
-      const value = trimmed.slice(eqIdx + 1).trim();
-      if (key) props[key] = value;
-    }
-
-    return {
-      apiUrl: props['nexora.api.url'],
-      organizationId: props['nexora.organization.id'],
-      defaultProjectCode: props['nexora.project.code'],
-      requestTimeoutMs: props['nexora.request.timeout.ms'],
-    };
-  } catch {
-    return {};
-  }
-}
-
 function asString(value: unknown): string | undefined {
   if (value == null) return undefined;
   return String(value);
@@ -119,20 +87,14 @@ function asString(value: unknown): string | undefined {
  *
  * Priority (highest wins):
  *   1. Environment variables — NEXORA_API_KEY (secrets), NEXORA_API_URL, etc.
- *   2. .nexora.toml (preferred) or .nexora.properties (legacy fallback)
+ *   2. .nexora.toml — project-level config, walked up from cwd
  *   3. Defaults (api url = localhost:8000)
  *
- * API key is ONLY loaded from env vars — never from config files.
+ * API key is ONLY loaded from env vars — never from the config file.
  */
 export function loadConfig(): NexoraConfig {
-  const configFile = findConfigFile(process.cwd());
-  let fileConfig: Record<string, string | undefined> = {};
-
-  if (configFile) {
-    fileConfig = configFile.format === 'toml'
-      ? loadTomlConfig(configFile.path)
-      : loadPropertiesConfig(configFile.path);
-  }
+  const configPath = findConfigFile(process.cwd());
+  const fileConfig = configPath ? loadTomlConfig(configPath) : {};
 
   const merged = {
     apiUrl: process.env.NEXORA_API_URL ?? fileConfig.apiUrl,
@@ -149,7 +111,7 @@ export function loadConfig(): NexoraConfig {
       .join('\n');
     throw new Error(
       `Nexora MCP configuration error:\n${issues}\n\n` +
-      `Create a ${TOML_FILENAME} file in your project root:\n\n` +
+      `Create a ${CONFIG_FILENAME} file in your project root:\n\n` +
       `  [api]\n` +
       `  url = "http://localhost:8000/api/v1"\n\n` +
       `  [organization]\n` +

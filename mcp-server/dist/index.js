@@ -21932,8 +21932,7 @@ function parse3(toml, { maxDepth = 1e3, integersAsBigInt } = {}) {
 }
 
 // src/config.ts
-var TOML_FILENAME = ".nexora.toml";
-var LEGACY_FILENAME = ".nexora.properties";
+var CONFIG_FILENAME = ".nexora.toml";
 var ConfigSchema = external_exports.object({
   apiUrl: external_exports.string().url().default("http://localhost:8000/api/v1").transform((url) => url.replace(/\/+$/, "")),
   apiKey: external_exports.string().min(1, "NEXORA_API_KEY is required (set as environment variable)"),
@@ -21945,10 +21944,8 @@ function findConfigFile(startDir) {
   const home = homedir();
   let dir = resolve(startDir);
   for (let depth = 0; depth < 50; depth++) {
-    const tomlCandidate = join(dir, TOML_FILENAME);
-    if (existsSync(tomlCandidate)) return { path: tomlCandidate, format: "toml" };
-    const propsCandidate = join(dir, LEGACY_FILENAME);
-    if (existsSync(propsCandidate)) return { path: propsCandidate, format: "properties" };
+    const candidate = join(dir, CONFIG_FILENAME);
+    if (existsSync(candidate)) return candidate;
     const parent = dirname(dir);
     if (parent === dir || dir === home) break;
     dir = parent;
@@ -21973,39 +21970,13 @@ function loadTomlConfig(filePath) {
     return {};
   }
 }
-function loadPropertiesConfig(filePath) {
-  try {
-    const content = readFileSync(filePath, "utf-8");
-    const props = {};
-    for (const line of content.split(/\r?\n/)) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith("#")) continue;
-      const eqIdx = trimmed.indexOf("=");
-      if (eqIdx === -1) continue;
-      const key = trimmed.slice(0, eqIdx).trim();
-      const value = trimmed.slice(eqIdx + 1).trim();
-      if (key) props[key] = value;
-    }
-    return {
-      apiUrl: props["nexora.api.url"],
-      organizationId: props["nexora.organization.id"],
-      defaultProjectCode: props["nexora.project.code"],
-      requestTimeoutMs: props["nexora.request.timeout.ms"]
-    };
-  } catch {
-    return {};
-  }
-}
 function asString(value) {
   if (value == null) return void 0;
   return String(value);
 }
 function loadConfig() {
-  const configFile = findConfigFile(process.cwd());
-  let fileConfig = {};
-  if (configFile) {
-    fileConfig = configFile.format === "toml" ? loadTomlConfig(configFile.path) : loadPropertiesConfig(configFile.path);
-  }
+  const configPath = findConfigFile(process.cwd());
+  const fileConfig = configPath ? loadTomlConfig(configPath) : {};
   const merged = {
     apiUrl: process.env.NEXORA_API_URL ?? fileConfig.apiUrl,
     apiKey: process.env.NEXORA_API_KEY,
@@ -22020,7 +21991,7 @@ function loadConfig() {
       `Nexora MCP configuration error:
 ${issues}
 
-Create a ${TOML_FILENAME} file in your project root:
+Create a ${CONFIG_FILENAME} file in your project root:
 
   [api]
   url = "http://localhost:8000/api/v1"

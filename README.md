@@ -1,44 +1,51 @@
 # Nexora MCP
 
-Claude Code plugin for [Nexora HRM](https://github.com/akhilrs/nexora) — Project Management agent integration.
+Claude Code plugin for [Nexora HRM](https://github.com/akhilrs/nexora) — AI-native project management integration.
 
 Manage work items, dependencies, comments, time tracking, and projects directly from Claude Code via MCP tools.
 
-## Quick Start
-
-### 1. Install the plugin
+## Install
 
 ```bash
-claude plugin add akhilrs/nexora-mcp
+/plugin marketplace add akhilrs/nexora-mcp
+/plugin add nexora
+/reload-plugins
 ```
 
-### 2. Create an API key
+## Setup
 
-In the Nexora web UI (admin), go to Settings > API Keys and create a new agent key.
+### 1. Create an API key
+
+In the Nexora web UI, go to **Settings > API Keys** and create a new agent key.
 Set it as an environment variable (add to your shell profile):
 
 ```bash
 export NEXORA_API_KEY=nxr_your_key_here
 ```
 
-### 3. Configure your project
+### 2. Configure your project
 
-Create a `.nexora.properties` file in your project root (like `sonar-project.properties`):
+Create a `.nexora.toml` file in your project root:
 
-```properties
-# Nexora MCP Configuration
-nexora.api.url=http://localhost:8000/api/v1
-nexora.organization.id=your-organization-uuid
-nexora.project.code=PRJ-001
+```toml
+[api]
+url = "https://nexora.example.com/api/v1"
+
+[organization]
+id = "your-organization-uuid"
+
+[project]
+code = "PRJ-001"
 ```
 
-This file is safe to commit — it contains no secrets. Copy from `.nexora.properties.example`.
+Copy from `.nexora.toml.example` as a starting point.
 
-The MCP server walks up from the current directory to find this file (like `.git` discovery), so it works from any subdirectory.
+This file is safe to commit — it contains no secrets (API key is env-only).
+The MCP server walks up from the current directory to find this file (like `.git` discovery).
 
-**Config priority**: env vars (secrets) > `.nexora.properties` (project) > defaults
+**Config priority**: env vars > `.nexora.toml` > defaults
 
-### 4. Use it
+### 3. Use it
 
 ```
 /nexora:ready          # find unblocked work items
@@ -95,19 +102,26 @@ The MCP server walks up from the current directory to find this file (like `.git
 | `nexora_stream_create` | Create stream |
 | `nexora_stream_show` | Show stream details |
 
+### Search + Activity (3)
+| Tool | Description |
+|------|-------------|
+| `nexora_search` | Full-text search across project |
+| `nexora_activity` | Recent activity feed |
+| `nexora_my_assignments` | My work items across projects |
+
 ### Utility (2)
 | Tool | Description |
 |------|-------------|
 | `nexora_context` | Connection status + project info |
 | `nexora_quickstart` | Workflow guide |
 
-## Slash Commands (9)
+## Slash Commands
 
 | Command | Description |
 |---------|-------------|
 | `/nexora:ready` | Find unblocked work items |
-| `/nexora:start <ID>` | Start task (transition + timer + context) |
-| `/nexora:done <ID>` | Complete task (stop timer + summary + transition) |
+| `/nexora:start <ID>` | Start task (transition + context) |
+| `/nexora:done <ID>` | Complete task with summary |
 | `/nexora:status` | Project overview |
 | `/nexora:plan` | Break down feature into work items |
 | `/nexora:timer` | Manage timer (start/stop/status) |
@@ -127,10 +141,10 @@ The MCP server is a stateless HTTP client — no local database, no business log
 
 ```bash
 cd mcp-server
-npm install
-npm run build        # esbuild bundle to dist/index.js
-npm run dev          # tsc --watch (type checking)
-npm run typecheck    # one-shot type check
+pnpm install
+pnpm build        # esbuild bundle to dist/index.js
+pnpm dev          # tsc --watch (type checking)
+pnpm typecheck    # one-shot type check
 ```
 
 ## License
