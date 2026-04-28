@@ -7,7 +7,9 @@
   "bin": {
     "nexora-mcp": "dist/index.js"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "esbuild src/index.ts --bundle --platform=node --target=node18 --format=esm --outfile=dist/index.js --sourcemap",
     "dev": "tsc --watch --noEmit",
@@ -15,10 +17,18 @@
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run build"
   },
-  "keywords": ["mcp", "nexora", "hrm", "project-management", "claude", "anthropic"],
+  "keywords": [
+    "mcp",
+    "nexora",
+    "hrm",
+    "project-management",
+    "claude",
+    "anthropic"
+  ],
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
+    "smol-toml": "^1.6.1",
     "zod": "^3.25.0"
   },
   "devDependencies": {

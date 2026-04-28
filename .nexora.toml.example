@@ -1,0 +1,16 @@
+# Nexora MCP configuration
+# Copy to .nexora.toml in your project root and fill in your values.
+# API key is loaded from NEXORA_API_KEY env var (never stored in this file).
+
+[api]
+url = "https://nexora.example.com/api/v1"
+
+[organization]
+id = "your-organization-uuid"
+
+[project]
+code = "PRJ-001"
+
+# Optional: request timeout in milliseconds (default: 30000)
+# [request]
+# timeout_ms = 30000
