@@ -37,25 +37,13 @@ function findConfigFile(startDir: string): string | null {
     dir = parent;
   }
 
+  // Also check home directory as last resort
+  const homeCandidate = join(home, CONFIG_FILENAME);
+  if (existsSync(homeCandidate)) return homeCandidate;
+
   return null;
 }
 
-/**
- * Parse a .nexora.toml file and extract config values.
- *
- * Expected format:
- *   [api]
- *   url = "https://nexora.example.com/api/v1"
- *
- *   [organization]
- *   id = "uuid-here"
- *
- *   [project]
- *   code = "PRJ-001"
- *
- *   [request]
- *   timeout_ms = 30000
- */
 function loadTomlConfig(filePath: string): Record<string, string | undefined> {
   try {
     const content = readFileSync(filePath, 'utf-8');
@@ -82,19 +70,31 @@ function asString(value: unknown): string | undefined {
   return String(value);
 }
 
-/**
- * Load and validate Nexora MCP configuration.
- *
- * Priority (highest wins):
- *   1. Environment variables — NEXORA_API_KEY (secrets), NEXORA_API_URL, etc.
- *   2. .nexora.toml — project-level config, walked up from cwd
- *   3. Defaults (api url = localhost:8000)
- *
- * API key is ONLY loaded from env vars — never from the config file.
- */
-export function loadConfig(): NexoraConfig {
-  const configPath = findConfigFile(process.cwd());
-  const fileConfig = configPath ? loadTomlConfig(configPath) : {};
+function resolveFileConfig(): Record<string, string | undefined> {
+  // 1. Explicit config path
+  if (process.env.NEXORA_CONFIG_PATH) {
+    const explicit = resolve(process.env.NEXORA_CONFIG_PATH);
+    if (existsSync(explicit)) return loadTomlConfig(explicit);
+  }
+
+  // 2. Walk up from NEXORA_PROJECT_DIR if set
+  if (process.env.NEXORA_PROJECT_DIR) {
+    const dir = resolve(process.env.NEXORA_PROJECT_DIR);
+    if (existsSync(dir)) {
+      const found = findConfigFile(dir);
+      if (found) return loadTomlConfig(found);
+    }
+  }
+
+  // 3. Walk up from cwd
+  const found = findConfigFile(process.cwd());
+  if (found) return loadTomlConfig(found);
+
+  return {};
+}
+
+function buildConfig(): NexoraConfig {
+  const fileConfig = resolveFileConfig();
 
   const merged = {
     apiUrl: process.env.NEXORA_API_URL ?? fileConfig.apiUrl,
@@ -118,10 +118,60 @@ export function loadConfig(): NexoraConfig {
       `  id = "your-org-uuid"\n\n` +
       `  [project]\n` +
       `  code = "PRJ-001"\n\n` +
-      `And set the API key as an environment variable:\n` +
-      `  export NEXORA_API_KEY=nxr_your_key_here`,
+      `Set the API key as an environment variable:\n` +
+      `  export NEXORA_API_KEY=nxr_your_key_here\n\n` +
+      `If running as a Claude Code plugin, also set:\n` +
+      `  export NEXORA_PROJECT_DIR=/path/to/your/project`,
     );
   }
 
   return result.data;
+}
+
+/**
+ * Lazy config loader — doesn't fail until first tool call.
+ *
+ * The MCP server starts from the plugin cache directory where
+ * process.cwd() won't find .nexora.toml. Config resolution uses:
+ *   1. NEXORA_CONFIG_PATH — explicit path to .nexora.toml
+ *   2. NEXORA_PROJECT_DIR — walk up from this directory
+ *   3. process.cwd() — walk up from current directory
+ *   4. ~ (home directory) — last resort
+ *
+ * Environment variables override file config:
+ *   NEXORA_API_URL, NEXORA_API_KEY, NEXORA_ORG_ID,
+ *   NEXORA_PROJECT_CODE, NEXORA_TIMEOUT_MS
+ *
+ * API key is ONLY loaded from env vars — never from the config file.
+ */
+export function loadConfig(): NexoraConfig {
+  return buildConfig();
+}
+
+let _cachedConfig: NexoraConfig | null = null;
+let _configError: Error | null = null;
+
+/**
+ * Get config lazily — caches on first successful load.
+ * Throws only when actually called, not at server startup.
+ */
+export function getConfig(): NexoraConfig {
+  if (_cachedConfig) return _cachedConfig;
+  if (_configError) throw _configError;
+
+  try {
+    _cachedConfig = buildConfig();
+    return _cachedConfig;
+  } catch (error) {
+    _configError = error as Error;
+    throw error;
+  }
+}
+
+/**
+ * Reset cached config — useful if env vars change at runtime.
+ */
+export function resetConfig(): void {
+  _cachedConfig = null;
+  _configError = null;
 }

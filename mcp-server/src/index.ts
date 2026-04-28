@@ -5,7 +5,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 
 import { NexoraClient } from './client.js';
-import { loadConfig } from './config.js';
+import { getConfig } from './config.js';
 import { NexoraApiError, NetworkError } from './errors.js';
 import { registerCommentTools } from './tools/comments.js';
 import { registerDependencyTools } from './tools/dependencies.js';
@@ -14,11 +14,28 @@ import { registerSearchActivityTools } from './tools/search-activity.js';
 import { registerTimeEntryTools } from './tools/time-entries.js';
 import { registerWorkItemTools } from './tools/work-items.js';
 
-const VERSION = '0.1.0';
+const VERSION = '0.2.0';
+
+/**
+ * Lazy client proxy — config is resolved on first tool call, not at startup.
+ * This allows the MCP server to start even when launched from the plugin
+ * cache directory where .nexora.toml is not discoverable.
+ */
+function createLazyClient(): NexoraClient {
+  let _client: NexoraClient | null = null;
+  return new Proxy({} as NexoraClient, {
+    get(_target, prop, receiver) {
+      if (!_client) {
+        _client = new NexoraClient(getConfig());
+      }
+      const value = Reflect.get(_client, prop, _client);
+      return typeof value === 'function' ? value.bind(_client) : value;
+    },
+  });
+}
 
 function createServer(): McpServer {
-  const config = loadConfig();
-  const client = new NexoraClient(config);
+  const client = createLazyClient();
 
   const server = new McpServer({
     name: 'nexora-mcp',
@@ -73,8 +90,8 @@ function createServer(): McpServer {
               type: 'text' as const,
               text: [
                 '# Nexora MCP Context',
-                `api: ${config.apiUrl}`,
-                `organization: ${config.organizationId}`,
+                `api: ${getConfig().apiUrl}`,
+                `organization: ${getConfig().organizationId}`,
                 `project: ${projectInfo}`,
                 `status: connected`,
               ].join('\n'),

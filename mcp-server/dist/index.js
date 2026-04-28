@@ -21950,6 +21950,8 @@ function findConfigFile(startDir) {
     if (parent === dir || dir === home) break;
     dir = parent;
   }
+  const homeCandidate = join(home, CONFIG_FILENAME);
+  if (existsSync(homeCandidate)) return homeCandidate;
   return null;
 }
 function loadTomlConfig(filePath) {
@@ -21974,9 +21976,24 @@ function asString(value) {
   if (value == null) return void 0;
   return String(value);
 }
-function loadConfig() {
-  const configPath = findConfigFile(process.cwd());
-  const fileConfig = configPath ? loadTomlConfig(configPath) : {};
+function resolveFileConfig() {
+  if (process.env.NEXORA_CONFIG_PATH) {
+    const explicit = resolve(process.env.NEXORA_CONFIG_PATH);
+    if (existsSync(explicit)) return loadTomlConfig(explicit);
+  }
+  if (process.env.NEXORA_PROJECT_DIR) {
+    const dir = resolve(process.env.NEXORA_PROJECT_DIR);
+    if (existsSync(dir)) {
+      const found2 = findConfigFile(dir);
+      if (found2) return loadTomlConfig(found2);
+    }
+  }
+  const found = findConfigFile(process.cwd());
+  if (found) return loadTomlConfig(found);
+  return {};
+}
+function buildConfig() {
+  const fileConfig = resolveFileConfig();
   const merged = {
     apiUrl: process.env.NEXORA_API_URL ?? fileConfig.apiUrl,
     apiKey: process.env.NEXORA_API_KEY,
@@ -22002,11 +22019,27 @@ Create a ${CONFIG_FILENAME} file in your project root:
   [project]
   code = "PRJ-001"
 
-And set the API key as an environment variable:
-  export NEXORA_API_KEY=nxr_your_key_here`
+Set the API key as an environment variable:
+  export NEXORA_API_KEY=nxr_your_key_here
+
+If running as a Claude Code plugin, also set:
+  export NEXORA_PROJECT_DIR=/path/to/your/project`
     );
   }
   return result.data;
+}
+var _cachedConfig = null;
+var _configError = null;
+function getConfig() {
+  if (_cachedConfig) return _cachedConfig;
+  if (_configError) throw _configError;
+  try {
+    _cachedConfig = buildConfig();
+    return _cachedConfig;
+  } catch (error2) {
+    _configError = error2;
+    throw error2;
+  }
 }
 
 // src/tools/helpers.ts
@@ -23039,10 +23072,21 @@ ${formatWorkItemCompact(item)}`);
 }
 
 // src/index.ts
-var VERSION = "0.1.0";
+var VERSION = "0.2.0";
+function createLazyClient() {
+  let _client = null;
+  return new Proxy({}, {
+    get(_target, prop, receiver) {
+      if (!_client) {
+        _client = new NexoraClient(getConfig());
+      }
+      const value = Reflect.get(_client, prop, _client);
+      return typeof value === "function" ? value.bind(_client) : value;
+    }
+  });
+}
 function createServer() {
-  const config2 = loadConfig();
-  const client = new NexoraClient(config2);
+  const client = createLazyClient();
   const server = new McpServer({
     name: "nexora-mcp",
     version: VERSION
@@ -23088,8 +23132,8 @@ function createServer() {
               type: "text",
               text: [
                 "# Nexora MCP Context",
-                `api: ${config2.apiUrl}`,
-                `organization: ${config2.organizationId}`,
+                `api: ${getConfig().apiUrl}`,
+                `organization: ${getConfig().organizationId}`,
                 `project: ${projectInfo}`,
                 `status: connected`
               ].join("\n")
