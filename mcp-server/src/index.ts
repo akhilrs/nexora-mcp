@@ -10,6 +10,7 @@ import { NexoraApiError, NetworkError } from './errors.js';
 import { registerCommentTools } from './tools/comments.js';
 import { registerDependencyTools } from './tools/dependencies.js';
 import { registerProjectTools } from './tools/projects.js';
+import { registerSearchActivityTools } from './tools/search-activity.js';
 import { registerTimeEntryTools } from './tools/time-entries.js';
 import { registerWorkItemTools } from './tools/work-items.js';
 
@@ -30,6 +31,7 @@ function createServer(): McpServer {
   registerCommentTools(server, client);
   registerTimeEntryTools(server, client);
   registerProjectTools(server, client);
+  registerSearchActivityTools(server, client);
 
   // Connectivity / context tool — validates the connection works
   server.registerTool(
@@ -134,6 +136,11 @@ nexora_comment_add        Add comment to work item
 nexora_comment_list       List comments
 nexora_comment_update     Edit comment
 nexora_comment_delete     Delete comment
+
+## Search & Activity
+nexora_search             Full-text search across project
+nexora_activity           Recent activity feed
+nexora_my_assignments     My work items across projects
 
 ## Utility
 nexora_context            Show connection status + active project
