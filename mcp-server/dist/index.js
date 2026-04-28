@@ -23087,7 +23087,7 @@ ${formatWorkItemCompact(item)}`);
 }
 
 // src/index.ts
-var VERSION = "0.2.0";
+var VERSION = "0.4.0";
 function createLazyClient() {
   let _client = null;
   return new Proxy({}, {
