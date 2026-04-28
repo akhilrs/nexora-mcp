@@ -1,0 +1,50 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "Use the Nexora MCP tools to show session context:\n1. Call nexora_context to verify connection\n2. Call nexora_timer_status to check for active timer\n3. Call nexora_work_item_list with status=in_progress to show active work\n4. Briefly summarize: active project, in-progress items, timer status\n\nKeep the output concise — 3-5 lines maximum."
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "Before ending the session, check Nexora MCP state:\n1. Call nexora_timer_status — if a timer is running, ask whether to stop it\n2. Call nexora_work_item_list with status=in_progress — for each item, ask if you should add a checkpoint comment summarizing progress so far\n\nDo NOT auto-stop timers or auto-complete tasks. Just prompt the user.",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "Subagent session ending. If you were working on a Nexora work item, add a checkpoint comment with nexora_comment_add summarizing what was accomplished in this subagent session.",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "Context is about to be compressed. If you are working on a Nexora work item, save your current progress as a comment using nexora_comment_add with a summary of: what you've done so far, what's remaining, any decisions made. This preserves context across the compression boundary."
+          }
+        ]
+      }
+    ]
+  }
+}
