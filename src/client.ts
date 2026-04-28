@@ -45,9 +45,46 @@ export class NexoraClient {
     return this.projectCode;
   }
 
+  private projectIdCache: string | undefined;
+
   switchProject(code: string): void {
     this.projectCode = code;
+    this.projectIdCache = undefined;
     this.displayIdCache.clear();
+  }
+
+  async requireProjectId(): Promise<string> {
+    if (this.projectIdCache) return this.projectIdCache;
+
+    if (!this.projectCode) {
+      throw new NexoraApiError(
+        'No project configured. Set NEXORA_PROJECT_CODE or call nexora_project_switch first.',
+        400,
+        'NO_PROJECT',
+      );
+    }
+
+    const result = await this.get<Array<{ id: string; code: string }>>(
+      '/projects',
+      { search: this.projectCode, limit: '50' },
+    );
+    const projects = Array.isArray(result) ? result : [];
+    const match = projects.find(
+      (p) => typeof p.code === 'string' && p.code.toLowerCase() === this.projectCode!.toLowerCase(),
+    );
+    if (!match) {
+      throw new NotFoundError(`Project '${this.projectCode}' not found`);
+    }
+
+    this.projectIdCache = match.id;
+    return match.id;
+  }
+
+  workItemsPath(projectId: string, ...segments: string[]): string {
+    const base = `/projects/${encodeURIComponent(projectId)}/work-items`;
+    if (segments.length === 0) return base;
+    const encoded = segments.map((s) => encodeURIComponent(s)).join('/');
+    return `${base}/${encoded}`;
   }
 
   async get<T = unknown>(path: string, query?: Record<string, string>): Promise<T> {

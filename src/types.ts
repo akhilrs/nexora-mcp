@@ -10,6 +10,8 @@ export interface WorkItem {
   status: 'backlog' | 'todo' | 'in_progress' | 'in_review' | 'completed' | 'wont_do';
   priority: number;
   assigned_to_id: string | null;
+  milestone_id: string | null;
+  stream_id: string | null;
   due_date: string | null;
   estimated_hours: number | null;
   tags: string[] | null;

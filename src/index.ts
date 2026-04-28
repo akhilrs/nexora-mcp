@@ -7,6 +7,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { NexoraClient } from './client.js';
 import { loadConfig } from './config.js';
 import { NexoraApiError, NetworkError } from './errors.js';
+import { registerWorkItemTools } from './tools/work-items.js';
 
 const VERSION = '0.1.0';
 
@@ -18,6 +19,9 @@ function createServer(): McpServer {
     name: 'nexora-mcp',
     version: VERSION,
   });
+
+  // Work item CRUD tools
+  registerWorkItemTools(server, client);
 
   // Connectivity / context tool — validates the connection works
   server.registerTool(
