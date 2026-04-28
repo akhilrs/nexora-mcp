@@ -1,0 +1,13 @@
+# Nexora MCP Configuration
+# Copy this file to .nexora.properties and fill in your values.
+# The API key is set via environment variable (never committed):
+#   export NEXORA_API_KEY=nxr_your_key_here
+
+# Nexora API server URL
+nexora.api.url=http://localhost:8000/api/v1
+
+# Your organization UUID (from Nexora web UI)
+nexora.organization.id=your-organization-uuid-here
+
+# Default project code (optional — can switch at runtime)
+nexora.project.code=PRJ-001

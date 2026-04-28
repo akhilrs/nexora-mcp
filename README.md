@@ -12,31 +12,31 @@ Manage work items, dependencies, comments, time tracking, and projects directly 
 claude plugin add akhilrs/nexora-mcp
 ```
 
-### 2. Configure
-
-Set environment variables:
-
-```bash
-export NEXORA_API_URL="http://localhost:8000/api/v1"
-export NEXORA_API_KEY="nxr_your_api_key_here"
-export NEXORA_ORG_ID="your-organization-uuid"
-export NEXORA_PROJECT_CODE="PRJ-001"  # optional default project
-```
-
-Or create `~/.config/nexora-mcp/config.json`:
-
-```json
-{
-  "api_url": "http://localhost:8000/api/v1",
-  "api_key": "nxr_your_api_key_here",
-  "organization_id": "your-org-uuid",
-  "default_project_code": "PRJ-001"
-}
-```
-
-### 3. Create an API key
+### 2. Create an API key
 
 In the Nexora web UI (admin), go to Settings > API Keys and create a new agent key.
+Set it as an environment variable (add to your shell profile):
+
+```bash
+export NEXORA_API_KEY=nxr_your_key_here
+```
+
+### 3. Configure your project
+
+Create a `.nexora.properties` file in your project root (like `sonar-project.properties`):
+
+```properties
+# Nexora MCP Configuration
+nexora.api.url=http://localhost:8000/api/v1
+nexora.organization.id=your-organization-uuid
+nexora.project.code=PRJ-001
+```
+
+This file is safe to commit — it contains no secrets. Copy from `.nexora.properties.example`.
+
+The MCP server walks up from the current directory to find this file (like `.git` discovery), so it works from any subdirectory.
+
+**Config priority**: env vars (secrets) > `.nexora.properties` (project) > defaults
 
 ### 4. Use it
 

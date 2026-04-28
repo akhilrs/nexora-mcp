@@ -4,5 +4,4 @@ dist/
 *.d.ts
 *.js.map
 !esbuild.config.js
-.nexora-mcp.json
 .env
