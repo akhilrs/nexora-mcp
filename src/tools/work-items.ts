@@ -1,23 +1,9 @@
 import { z } from 'zod';
 
 import type { NexoraClient } from '../client.js';
-import { NexoraApiError } from '../errors.js';
 import { formatWorkItem, formatWorkItemCompact, formatWorkItemList } from '../formatters.js';
 import type { WorkItem } from '../types.js';
-
-function toolResult(text: string, isError = false) {
-  return { content: [{ type: 'text' as const, text }], isError };
-}
-
-function errorResult(error: unknown) {
-  if (error instanceof NexoraApiError) {
-    return toolResult(`Error ${error.status}: ${error.message}`, true);
-  }
-  if (error instanceof Error) {
-    return toolResult(`Error: ${error.message}`, true);
-  }
-  return toolResult(`Error: ${String(error)}`, true);
-}
+import { errorResult, toolResult } from './helpers.js';
 
 function cleanQuery(params: Record<string, string | number | undefined>): Record<string, string> {
   const result: Record<string, string> = {};
