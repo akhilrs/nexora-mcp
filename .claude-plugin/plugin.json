@@ -1,7 +1,7 @@
 {
   "name": "nexora",
   "description": "AI-native project management for Claude Code. Create and manage work items, track dependencies, add comments, log time, and search across your Nexora projects — all from the terminal.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": {
     "name": "Akhil RS",
     "url": "https://github.com/akhilrs"
