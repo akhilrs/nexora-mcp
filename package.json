@@ -1,0 +1,32 @@
+{
+  "name": "@nexora/mcp",
+  "version": "0.1.0",
+  "description": "MCP server for Nexora HRM — Project Management agent integration",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "nexora-mcp": "dist/index.js"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --platform=node --target=node18 --format=esm --outfile=dist/index.js --sourcemap",
+    "dev": "tsc --watch --noEmit",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": ["mcp", "nexora", "hrm", "project-management", "claude", "anthropic"],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.27.2",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
