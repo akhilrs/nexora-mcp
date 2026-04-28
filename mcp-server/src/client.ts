@@ -32,6 +32,7 @@ export class NexoraClient {
   private projectCode: string | undefined;
 
   private readonly displayIdCache = new Map<string, string>();
+  private currentUserIdCache: string | undefined;
 
   constructor(config: NexoraConfig) {
     this.baseUrl = config.apiUrl;
@@ -78,6 +79,21 @@ export class NexoraClient {
 
     this.projectIdCache = match.id;
     return match.id;
+  }
+
+  async resolveCurrentUserId(): Promise<string | undefined> {
+    if (this.currentUserIdCache) return this.currentUserIdCache;
+
+    try {
+      const me = await this.get<{ id: string; employee_id?: string }>('/me');
+      const userId = me.employee_id ?? me.id;
+      if (userId) {
+        this.currentUserIdCache = userId;
+      }
+      return this.currentUserIdCache;
+    } catch {
+      return undefined;
+    }
   }
 
   workItemsPath(projectId: string, ...segments: string[]): string {

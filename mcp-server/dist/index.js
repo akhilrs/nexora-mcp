@@ -21074,6 +21074,7 @@ var NexoraClient = class {
   timeoutMs;
   projectCode;
   displayIdCache = /* @__PURE__ */ new Map();
+  currentUserIdCache;
   constructor(config2) {
     this.baseUrl = config2.apiUrl;
     this.apiKey = config2.apiKey;
@@ -21112,6 +21113,19 @@ var NexoraClient = class {
     }
     this.projectIdCache = match.id;
     return match.id;
+  }
+  async resolveCurrentUserId() {
+    if (this.currentUserIdCache) return this.currentUserIdCache;
+    try {
+      const me = await this.get("/me");
+      const userId = me.employee_id ?? me.id;
+      if (userId) {
+        this.currentUserIdCache = userId;
+      }
+      return this.currentUserIdCache;
+    } catch {
+      return void 0;
+    }
   }
   workItemsPath(projectId, ...segments) {
     const base = `/projects/${encodeURIComponent(projectId)}/work-items`;
@@ -22854,6 +22868,7 @@ function registerWorkItemTools(server, client) {
         if (params.parent_display_id) {
           parentId = await client.resolveDisplayId(params.parent_display_id, projectId);
         }
+        const assignedToId = params.assigned_to_id ?? await client.resolveCurrentUserId();
         const body = {
           title: params.title,
           item_type: params.type,
@@ -22861,7 +22876,7 @@ function registerWorkItemTools(server, client) {
           priority: params.priority,
           description: params.description,
           parent_id: parentId,
-          assigned_to_id: params.assigned_to_id,
+          assigned_to_id: assignedToId,
           due_date: params.due_date,
           estimated_hours: params.estimated_hours,
           stream_id: params.stream_id,

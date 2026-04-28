@@ -50,6 +50,8 @@ export function registerWorkItemTools(server: any, client: NexoraClient): void {
           parentId = await client.resolveDisplayId(params.parent_display_id, projectId);
         }
 
+        const assignedToId = params.assigned_to_id ?? await client.resolveCurrentUserId();
+
         const body: Record<string, unknown> = {
           title: params.title,
           item_type: params.type,
@@ -57,7 +59,7 @@ export function registerWorkItemTools(server: any, client: NexoraClient): void {
           priority: params.priority,
           description: params.description,
           parent_id: parentId,
-          assigned_to_id: params.assigned_to_id,
+          assigned_to_id: assignedToId,
           due_date: params.due_date,
           estimated_hours: params.estimated_hours,
           stream_id: params.stream_id,
