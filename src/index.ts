@@ -87,8 +87,63 @@ function createServer(): McpServer {
     },
   );
 
+  // Quickstart guide
+  server.registerTool(
+    'nexora_quickstart',
+    {
+      title: 'Nexora Quickstart',
+      description: 'Show available Nexora MCP tools and recommended workflow.',
+      inputSchema: {},
+    },
+    async () => ({
+      content: [
+        {
+          type: 'text' as const,
+          text: QUICKSTART_GUIDE,
+        },
+      ],
+    }),
+  );
+
   return server;
 }
+
+const QUICKSTART_GUIDE = `# Nexora MCP — Quick Reference
+
+## Work Items
+nexora_work_item_create   Create task/bug/story/epic/feature
+nexora_work_item_list     List with status/type/assignee filters
+nexora_work_item_show     Show details by display ID (PM-42)
+nexora_work_item_update   Update any field
+nexora_work_item_delete   Soft-delete (mark as wont_do)
+nexora_work_item_ready    Unblocked todo items
+nexora_work_item_children List children of a parent item
+nexora_work_item_transition Change status only
+
+## Dependencies
+nexora_dep_add            Add blocking dependency
+nexora_dep_remove         Remove dependency
+nexora_dep_list           List all deps (blocked_by + blocks)
+
+## Comments
+nexora_comment_add        Add comment to work item
+nexora_comment_list       List comments
+nexora_comment_update     Edit comment
+nexora_comment_delete     Delete comment
+
+## Utility
+nexora_context            Show connection status + active project
+nexora_quickstart         This guide
+
+## Recommended Workflow
+1. nexora_work_item_ready — find what to work on
+2. nexora_work_item_show PM-42 — understand the task
+3. nexora_work_item_transition PM-42 in_progress — start
+4. nexora_comment_add PM-42 "Working on..." — track progress
+5. [do the work]
+6. nexora_work_item_transition PM-42 completed — done
+7. nexora_comment_add PM-42 "Completed: summary" — close out
+`;
 
 function formatError(error: unknown): string {
   if (error instanceof NexoraApiError) {
