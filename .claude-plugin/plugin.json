@@ -1,0 +1,26 @@
+{
+  "name": "nexora",
+  "description": "Nexora HRM — Project Management agent integration. Manage work items, dependencies, comments, time tracking, and projects via MCP tools.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Nexora",
+    "url": "https://github.com/akhilrs/nexora-mcp"
+  },
+  "repository": "https://github.com/akhilrs/nexora-mcp",
+  "license": "MIT",
+  "keywords": [
+    "project-management",
+    "work-items",
+    "time-tracking",
+    "task-management",
+    "hrm"
+  ],
+  "mcpServers": {
+    "nexora": {
+      "command": "node",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/mcp-server/dist/index.js"
+      ]
+    }
+  }
+}
