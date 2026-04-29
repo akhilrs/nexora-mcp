@@ -13,6 +13,11 @@ function cleanQuery(params: Record<string, string | number | undefined>): Record
   return result;
 }
 
+const acceptanceCriterionSchema = z.object({
+  criterion: z.string().describe('The acceptance criterion text'),
+  testable: z.boolean().default(true).describe('Whether this criterion is testable'),
+});
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function registerWorkItemTools(server: any, client: NexoraClient): void {
   // 1. CREATE
@@ -39,9 +44,10 @@ export function registerWorkItemTools(server: any, client: NexoraClient): void {
         estimated_hours: z.number().optional().describe('Estimated hours'),
         tags: z.string().optional().describe('Comma-separated tags'),
         stream_id: z.string().optional().describe('Stream UUID'),
+        acceptance_criteria: z.array(acceptanceCriterionSchema).optional().describe('Acceptance criteria list'),
       },
     },
-    async (params: { title: string; type: string; description?: string; status: string; priority: number; parent_display_id?: string; assigned_to_id?: string; due_date?: string; estimated_hours?: number; tags?: string; stream_id?: string }) => {
+    async (params: { title: string; type: string; description?: string; status: string; priority: number; parent_display_id?: string; assigned_to_id?: string; due_date?: string; estimated_hours?: number; tags?: string; stream_id?: string; acceptance_criteria?: Array<{ criterion: string; testable: boolean }> }) => {
       try {
         const projectId = await client.requireProjectId();
 
@@ -64,6 +70,7 @@ export function registerWorkItemTools(server: any, client: NexoraClient): void {
           estimated_hours: params.estimated_hours,
           stream_id: params.stream_id,
           tags: params.tags ? params.tags.split(',').map((t: string) => t.trim()) : undefined,
+          acceptance_criteria: params.acceptance_criteria,
         };
 
         const item = await client.post<WorkItem>(client.workItemsPath(projectId), body);
@@ -158,9 +165,10 @@ export function registerWorkItemTools(server: any, client: NexoraClient): void {
         estimated_hours: z.number().optional().describe('New estimated hours'),
         tags: z.string().optional().describe('New comma-separated tags'),
         stream_id: z.string().optional().describe('New stream UUID'),
+        acceptance_criteria: z.array(acceptanceCriterionSchema).optional().describe('New acceptance criteria list'),
       },
     },
-    async (params: { display_id: string; title?: string; description?: string; status?: string; priority?: number; assigned_to_id?: string; due_date?: string; estimated_hours?: number; tags?: string; stream_id?: string }) => {
+    async (params: { display_id: string; title?: string; description?: string; status?: string; priority?: number; assigned_to_id?: string; due_date?: string; estimated_hours?: number; tags?: string; stream_id?: string; acceptance_criteria?: Array<{ criterion: string; testable: boolean }> }) => {
       try {
         const projectId = await client.requireProjectId();
         const uuid = await client.resolveDisplayId(params.display_id, projectId);
@@ -176,6 +184,9 @@ export function registerWorkItemTools(server: any, client: NexoraClient): void {
         if (params.stream_id !== undefined) body.stream_id = params.stream_id;
         if (params.tags !== undefined) {
           body.tags = params.tags.split(',').map((t: string) => t.trim());
+        }
+        if (params.acceptance_criteria !== undefined) {
+          body.acceptance_criteria = params.acceptance_criteria;
         }
 
         const item = await client.patch<WorkItem>(client.workItemsPath(projectId, uuid), body);

@@ -22547,6 +22547,12 @@ function formatWorkItem(item) {
   if (item.description) {
     lines.push(`description: ${esc2(item.description).slice(0, 500)}`);
   }
+  if (item.acceptance_criteria?.length) {
+    lines.push(`acceptance_criteria:`);
+    for (const ac of item.acceptance_criteria) {
+      lines.push(`  - [${ac.testable ? "testable" : "non-testable"}] ${ac.criterion}`);
+    }
+  }
   if (item.completed_at) lines.push(`completed_at: ${formatDate(item.completed_at)}`);
   lines.push(`created: ${formatDate(item.created_at)}`);
   lines.push(`id: ${item.id}`);
@@ -22841,6 +22847,10 @@ function cleanQuery(params) {
   }
   return result;
 }
+var acceptanceCriterionSchema = external_exports.object({
+  criterion: external_exports.string().describe("The acceptance criterion text"),
+  testable: external_exports.boolean().default(true).describe("Whether this criterion is testable")
+});
 function registerWorkItemTools(server, client) {
   server.registerTool(
     "nexora_work_item_create",
@@ -22858,7 +22868,8 @@ function registerWorkItemTools(server, client) {
         due_date: external_exports.string().optional().describe("Due date (YYYY-MM-DD)"),
         estimated_hours: external_exports.number().optional().describe("Estimated hours"),
         tags: external_exports.string().optional().describe("Comma-separated tags"),
-        stream_id: external_exports.string().optional().describe("Stream UUID")
+        stream_id: external_exports.string().optional().describe("Stream UUID"),
+        acceptance_criteria: external_exports.array(acceptanceCriterionSchema).optional().describe("Acceptance criteria list")
       }
     },
     async (params) => {
@@ -22880,7 +22891,8 @@ function registerWorkItemTools(server, client) {
           due_date: params.due_date,
           estimated_hours: params.estimated_hours,
           stream_id: params.stream_id,
-          tags: params.tags ? params.tags.split(",").map((t) => t.trim()) : void 0
+          tags: params.tags ? params.tags.split(",").map((t) => t.trim()) : void 0,
+          acceptance_criteria: params.acceptance_criteria
         };
         const item = await client.post(client.workItemsPath(projectId), body);
         return toolResult(`Created:
@@ -22958,7 +22970,8 @@ ${formatWorkItem(item)}`);
         due_date: external_exports.string().optional().describe("New due date (YYYY-MM-DD)"),
         estimated_hours: external_exports.number().optional().describe("New estimated hours"),
         tags: external_exports.string().optional().describe("New comma-separated tags"),
-        stream_id: external_exports.string().optional().describe("New stream UUID")
+        stream_id: external_exports.string().optional().describe("New stream UUID"),
+        acceptance_criteria: external_exports.array(acceptanceCriterionSchema).optional().describe("New acceptance criteria list")
       }
     },
     async (params) => {
@@ -22976,6 +22989,9 @@ ${formatWorkItem(item)}`);
         if (params.stream_id !== void 0) body.stream_id = params.stream_id;
         if (params.tags !== void 0) {
           body.tags = params.tags.split(",").map((t) => t.trim());
+        }
+        if (params.acceptance_criteria !== void 0) {
+          body.acceptance_criteria = params.acceptance_criteria;
         }
         const item = await client.patch(client.workItemsPath(projectId, uuid2), body);
         return toolResult(`Updated:
@@ -23087,7 +23103,7 @@ ${formatWorkItemCompact(item)}`);
 }
 
 // src/index.ts
-var VERSION = "0.4.0";
+var VERSION = "0.5.0";
 function createLazyClient() {
   let _client = null;
   return new Proxy({}, {

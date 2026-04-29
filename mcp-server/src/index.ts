@@ -14,7 +14,7 @@ import { registerSearchActivityTools } from './tools/search-activity.js';
 import { registerTimeEntryTools } from './tools/time-entries.js';
 import { registerWorkItemTools } from './tools/work-items.js';
 
-const VERSION = '0.4.0';
+const VERSION = '0.5.0';
 
 /**
  * Lazy client proxy — config is resolved on first tool call, not at startup.

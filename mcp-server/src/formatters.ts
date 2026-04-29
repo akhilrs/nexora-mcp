@@ -35,6 +35,12 @@ export function formatWorkItem(item: WorkItem): string {
   if (item.description) {
     lines.push(`description: ${esc(item.description).slice(0, 500)}`);
   }
+  if (item.acceptance_criteria?.length) {
+    lines.push(`acceptance_criteria:`);
+    for (const ac of item.acceptance_criteria) {
+      lines.push(`  - [${ac.testable ? 'testable' : 'non-testable'}] ${ac.criterion}`);
+    }
+  }
   if (item.completed_at) lines.push(`completed_at: ${formatDate(item.completed_at)}`);
 
   lines.push(`created: ${formatDate(item.created_at)}`);

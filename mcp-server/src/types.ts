@@ -1,3 +1,8 @@
+export interface AcceptanceCriterion {
+  criterion: string;
+  testable: boolean;
+}
+
 export interface WorkItem {
   id: string;
   organization_id: string;
@@ -15,6 +20,7 @@ export interface WorkItem {
   due_date: string | null;
   estimated_hours: number | null;
   tags: string[] | null;
+  acceptance_criteria: AcceptanceCriterion[] | null;
   completed_at: string | null;
   created_at: string;
   updated_at: string;
