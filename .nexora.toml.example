@@ -14,3 +14,12 @@ code = "PRJ-001"
 # Optional: request timeout in milliseconds (default: 30000)
 # [request]
 # timeout_ms = 30000
+
+# Optional: opt out of auto-timer behavior (default: true)
+# When enabled, transitioning a work item INTO `in_progress` auto-starts a
+# timer for it; transitioning OUT (in_review, completed, todo, backlog,
+# wont_do) auto-stops the work item's timer. Multiple work items can have
+# concurrent timers running. Set to false to disable and manage timers
+# manually with nexora_timer_start / nexora_timer_stop.
+# [timer]
+# auto_track = true

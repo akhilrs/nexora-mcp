@@ -85,11 +85,25 @@ The MCP server walks up from the current directory to find this file (like `.git
 ### Time Tracking (5)
 | Tool | Description |
 |------|-------------|
-| `nexora_timer_start` | Start timer (one at a time) |
-| `nexora_timer_stop` | Stop active timer |
-| `nexora_timer_status` | Check active timer + elapsed |
+| `nexora_timer_start` | Start a timer for a specific work item (concurrent across distinct work items; one optional freelance) |
+| `nexora_timer_stop` | Stop a timer scoped by `display_id` (omit to stop the freelance timer) |
+| `nexora_timer_status` | List ALL active timers with elapsed time |
 | `nexora_time_log` | Manual time entry |
 | `nexora_time_summary` | Aggregated time view |
+
+#### Auto-timer on transitions
+By default, transitioning a work item INTO `in_progress` auto-starts a timer scoped to that work item, and transitioning OUT (`in_review`, `completed`, `todo`, `backlog`, `wont_do`) auto-stops that work item's timer. Multiple work items can have concurrent timers running.
+
+Opt out by adding to `.nexora.toml`:
+```toml
+[timer]
+auto_track = false
+```
+Or via env: `NEXORA_TIMER_AUTO_TRACK=false`.
+
+#### Breaking changes (vs. pre-PM-51 versions)
+- `nexora_timer_status` now returns a **list** of active timers (was a single object). When nothing is running, returns "No active timers."
+- `nexora_timer_stop` now accepts an optional `display_id` argument; omitting it targets the freelance timer specifically (not "any active timer"). Pair with the new karya backend that requires `work_item_id` in the stop request body.
 
 ### Projects + Streams (7)
 | Tool | Description |

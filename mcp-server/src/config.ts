@@ -16,6 +16,12 @@ const ConfigSchema = z.object({
   organizationId: z.string().uuid('organization.id must be a valid UUID'),
   defaultProjectCode: z.string().optional(),
   requestTimeoutMs: z.coerce.number().int().positive().default(30_000),
+  timerAutoTrack: z
+    .preprocess(
+      (v) => (v === undefined || v === null || v === '' ? undefined : v),
+      z.union([z.boolean(), z.string().transform((s) => s.toLowerCase() !== 'false')]),
+    )
+    .default(true),
 });
 
 export type NexoraConfig = z.infer<typeof ConfigSchema>;
@@ -44,7 +50,9 @@ function findConfigFile(startDir: string): string | null {
   return null;
 }
 
-function loadTomlConfig(filePath: string): Record<string, string | undefined> {
+type FileConfigValues = Record<string, string | boolean | undefined>;
+
+function loadTomlConfig(filePath: string): FileConfigValues {
   try {
     const content = readFileSync(filePath, 'utf-8');
     const doc = parseToml(content) as Record<string, unknown>;
@@ -53,12 +61,14 @@ function loadTomlConfig(filePath: string): Record<string, string | undefined> {
     const org = doc.organization as Record<string, unknown> | undefined;
     const project = doc.project as Record<string, unknown> | undefined;
     const request = doc.request as Record<string, unknown> | undefined;
+    const timer = doc.timer as Record<string, unknown> | undefined;
 
     return {
       apiUrl: asString(api?.url),
       organizationId: asString(org?.id),
       defaultProjectCode: asString(project?.code),
       requestTimeoutMs: asString(request?.timeout_ms),
+      timerAutoTrack: asBoolean(timer?.auto_track),
     };
   } catch {
     return {};
@@ -70,7 +80,14 @@ function asString(value: unknown): string | undefined {
   return String(value);
 }
 
-function resolveFileConfig(): Record<string, string | undefined> {
+function asBoolean(value: unknown): boolean | undefined {
+  if (value == null) return undefined;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') return value.toLowerCase() !== 'false';
+  return undefined;
+}
+
+function resolveFileConfig(): FileConfigValues {
   // 1. Explicit config path
   if (process.env.NEXORA_CONFIG_PATH) {
     const explicit = resolve(process.env.NEXORA_CONFIG_PATH);
@@ -102,6 +119,8 @@ function buildConfig(): NexoraConfig {
     organizationId: process.env.NEXORA_ORG_ID ?? fileConfig.organizationId,
     defaultProjectCode: process.env.NEXORA_PROJECT_CODE ?? fileConfig.defaultProjectCode,
     requestTimeoutMs: process.env.NEXORA_TIMEOUT_MS ?? fileConfig.requestTimeoutMs,
+    timerAutoTrack:
+      process.env.NEXORA_TIMER_AUTO_TRACK ?? fileConfig.timerAutoTrack,
   };
 
   const result = ConfigSchema.safeParse(merged);

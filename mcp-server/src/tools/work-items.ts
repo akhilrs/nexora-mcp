@@ -1,8 +1,9 @@
 import { z } from 'zod';
 
 import type { NexoraClient } from '../client.js';
+import { getConfig } from '../config.js';
 import { formatWorkItem, formatWorkItemCompact, formatWorkItemList } from '../formatters.js';
-import type { WorkItem } from '../types.js';
+import type { TimeEntry, WorkItem } from '../types.js';
 import { errorResult, toolResult } from './helpers.js';
 
 function cleanQuery(params: Record<string, string | number | undefined>): Record<string, string> {
@@ -11,6 +12,55 @@ function cleanQuery(params: Record<string, string | number | undefined>): Record
     if (val != null && val !== '') result[key] = String(val);
   }
   return result;
+}
+
+/**
+ * Auto-start/stop a timer when a work item transitions in or out of `in_progress`.
+ *
+ * - oldStatus ≠ in_progress AND newStatus = in_progress → start timer for this work item
+ * - oldStatus = in_progress AND newStatus ≠ in_progress → stop the work item's timer
+ * - same status → no-op
+ *
+ * Timer side-effects must never block or fail the parent transition; this helper
+ * always returns an outcome string and never throws.
+ */
+async function applyAutoTimer(
+  client: NexoraClient,
+  projectId: string,
+  workItemId: string,
+  oldStatus: string,
+  newStatus: string,
+): Promise<string | null> {
+  let autoTrack = true;
+  try {
+    autoTrack = getConfig().timerAutoTrack;
+  } catch {
+    return null;
+  }
+  if (!autoTrack) return null;
+  if (oldStatus === newStatus) return null;
+
+  const enteringInProgress = oldStatus !== 'in_progress' && newStatus === 'in_progress';
+  const leavingInProgress = oldStatus === 'in_progress' && newStatus !== 'in_progress';
+
+  if (!enteringInProgress && !leavingInProgress) return null;
+
+  try {
+    if (enteringInProgress) {
+      const entry = await client.post<TimeEntry>('/time-entries/timer/start', {
+        project_id: projectId,
+        work_item_id: workItemId,
+      });
+      return `auto-timer: started (${entry.id})`;
+    }
+    await client.post<TimeEntry>('/time-entries/timer/stop', {
+      work_item_id: workItemId,
+    });
+    return 'auto-timer: stopped';
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    return `auto-timer: skipped — ${msg}`;
+  }
 }
 
 const acceptanceCriterionSchema = z.object({
@@ -171,7 +221,21 @@ export function registerWorkItemTools(server: any, client: NexoraClient): void {
     async (params: { display_id: string; title?: string; description?: string; status?: string; priority?: number; assigned_to_id?: string; due_date?: string; estimated_hours?: number; tags?: string; stream_id?: string; acceptance_criteria?: Array<{ criterion: string; testable: boolean }> }) => {
       try {
         const projectId = await client.requireProjectId();
-        const uuid = await client.resolveDisplayId(params.display_id, projectId);
+
+        // When status changes we need the old status for auto-timer — fetch the
+        // full item. For status-less updates the cached resolveDisplayId path
+        // is fine.
+        let uuid: string;
+        let oldStatus: string | null = null;
+        if (params.status !== undefined) {
+          const current = await client.get<WorkItem>(
+            client.workItemsPath(projectId, params.display_id),
+          );
+          uuid = current.id;
+          oldStatus = current.status;
+        } else {
+          uuid = await client.resolveDisplayId(params.display_id, projectId);
+        }
 
         const body: Record<string, unknown> = {};
         if (params.title !== undefined) body.title = params.title;
@@ -190,7 +254,13 @@ export function registerWorkItemTools(server: any, client: NexoraClient): void {
         }
 
         const item = await client.patch<WorkItem>(client.workItemsPath(projectId, uuid), body);
-        return toolResult(`Updated:\n${formatWorkItem(item)}`);
+
+        let timerNote: string | null = null;
+        if (params.status !== undefined && oldStatus !== null) {
+          timerNote = await applyAutoTimer(client, projectId, uuid, oldStatus, item.status);
+        }
+        const suffix = timerNote ? `\n${timerNote}` : '';
+        return toolResult(`Updated:\n${formatWorkItem(item)}${suffix}`);
       } catch (error) {
         return errorResult(error);
       }
@@ -295,12 +365,22 @@ export function registerWorkItemTools(server: any, client: NexoraClient): void {
     async ({ display_id, status }: { display_id: string; status: string }) => {
       try {
         const projectId = await client.requireProjectId();
-        const uuid = await client.resolveDisplayId(display_id, projectId);
+
+        // Single GET to fetch UUID + current status; same round-trip as resolveDisplayId.
+        const current = await client.get<WorkItem>(
+          client.workItemsPath(projectId, display_id),
+        );
+        const uuid = current.id;
+        const oldStatus = current.status;
+
         const item = await client.patch<WorkItem>(
           client.workItemsPath(projectId, uuid),
           { status },
         );
-        return toolResult(`${display_id}: ${status}\n${formatWorkItemCompact(item)}`);
+
+        const timerNote = await applyAutoTimer(client, projectId, uuid, oldStatus, item.status);
+        const suffix = timerNote ? `\n${timerNote}` : '';
+        return toolResult(`${display_id}: ${status}\n${formatWorkItemCompact(item)}${suffix}`);
       } catch (error) {
         return errorResult(error);
       }

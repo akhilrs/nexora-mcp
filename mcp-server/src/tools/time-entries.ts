@@ -53,48 +53,69 @@ export function registerTimeEntryTools(server: any, client: NexoraClient): void 
     'nexora_timer_stop',
     {
       title: 'Stop Timer',
-      description: 'Stop the currently running timer.',
-      inputSchema: {},
+      description:
+        'Stop a running timer scoped to a specific work item. Omit display_id to stop the freelance (no work item) timer.',
+      inputSchema: {
+        display_id: z
+          .string()
+          .optional()
+          .describe('Work item display ID (e.g., PM-42). Omit to stop the freelance timer.'),
+      },
     },
-    async () => {
+    async ({ display_id }: { display_id?: string }) => {
       try {
-        const entry = await client.post<TimeEntry>('/time-entries/timer/stop');
-        return toolResult(`Timer stopped: ${entry.duration_minutes}m logged\n${formatTimeEntry(entry)}`);
+        let workItemId: string | null = null;
+        if (display_id) {
+          const projectId = await client.requireProjectId();
+          workItemId = await client.resolveDisplayId(display_id, projectId);
+        }
+
+        const entry = await client.post<TimeEntry>('/time-entries/timer/stop', {
+          work_item_id: workItemId,
+        });
+        const target = display_id ? ` for ${display_id}` : ' (freelance)';
+        return toolResult(`Timer stopped${target}: ${entry.duration_minutes}m logged\n${formatTimeEntry(entry)}`);
       } catch (error) {
         return errorResult(error);
       }
     },
   );
 
-  // 3. TIMER STATUS
+  // 3. TIMER STATUS — returns all currently running timers
   server.registerTool(
     'nexora_timer_status',
     {
       title: 'Timer Status',
-      description: 'Check if a timer is currently running and show elapsed time.',
+      description:
+        'List all currently running timers for the authenticated user with elapsed time. ' +
+        'Returns an empty list when nothing is running.',
       inputSchema: {},
     },
     async () => {
       try {
-        const entry = await client.get<TimeEntry | null>('/time-entries/my-active-timer');
-        if (!entry) {
-          return toolResult('No active timer.');
+        const entries = await client.get<TimeEntry[]>('/time-entries/my-active-timers');
+        if (!entries || entries.length === 0) {
+          return toolResult('No active timers.');
         }
 
-        let elapsed = 'unknown';
-        if (entry.started_at) {
-          const startMs = new Date(entry.started_at).getTime();
-          if (Number.isFinite(startMs)) {
-            const elapsedMs = Math.max(0, Date.now() - startMs);
-            const mins = Math.floor(elapsedMs / 60_000);
-            const hrs = Math.floor(mins / 60);
-            elapsed = hrs > 0 ? `${hrs}h ${mins % 60}m` : `${mins}m`;
+        const lines = [`# Active Timers (${entries.length})`];
+        for (const entry of entries) {
+          let elapsed = 'unknown';
+          if (entry.started_at) {
+            const startMs = new Date(entry.started_at).getTime();
+            if (Number.isFinite(startMs)) {
+              const elapsedMs = Math.max(0, Date.now() - startMs);
+              const mins = Math.floor(elapsedMs / 60_000);
+              const hrs = Math.floor(mins / 60);
+              elapsed = hrs > 0 ? `${hrs}h ${mins % 60}m` : `${mins}m`;
+            }
           }
+          const scope = entry.work_item_id
+            ? `work_item ${entry.work_item_id.slice(0, 8)}…`
+            : 'freelance';
+          lines.push(`- ${scope} | elapsed: ${elapsed} | ${formatTimeEntry(entry)} | id: ${entry.id}`);
         }
-
-        return toolResult(
-          `# Active Timer\nelapsed: ${elapsed}\n${formatTimeEntry(entry)}\nid: ${entry.id}`,
-        );
+        return toolResult(lines.join('\n'));
       } catch (error) {
         return errorResult(error);
       }

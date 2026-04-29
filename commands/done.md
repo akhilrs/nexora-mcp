@@ -21,8 +21,9 @@ Never complete without a summary. Good summaries include:
 
 ## Execution
 
-1. Call `nexora_timer_stop` to stop any active timer
-2. Ask for or generate a completion summary
-3. Call `nexora_comment_add` with the summary (content: "Completed: <summary>")
-4. Call `nexora_work_item_transition` to set status to `completed`
-5. Call `nexora_work_item_ready` to show what's unblocked next
+1. Ask for or generate a completion summary
+2. Call `nexora_comment_add` with the summary (content: "Completed: <summary>")
+3. Call `nexora_work_item_transition` to set status to `completed` — this auto-stops the work item's timer when `[timer] auto_track` is enabled (default). No separate `nexora_timer_stop` call needed.
+4. Call `nexora_work_item_ready` to show what's unblocked next
+
+If `[timer] auto_track = false` in `.nexora.toml`, call `nexora_timer_stop` with the display ID before the transition to log the time manually.

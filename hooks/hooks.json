@@ -16,9 +16,9 @@
         "matcher": "*",
         "hooks": [
           {
-            "type": "prompt",
-            "prompt": "Before ending the session, check Nexora MCP state:\n1. Call nexora_timer_status — if a timer is running, ask whether to stop it\n2. Call nexora_work_item_list with status=in_progress — for each item, ask if you should add a checkpoint comment summarizing progress so far\n\nDo NOT auto-stop timers or auto-complete tasks. Just prompt the user.",
-            "timeout": 15
+            "type": "command",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/stop-checkpoint.mjs",
+            "timeout": 5
           }
         ]
       }

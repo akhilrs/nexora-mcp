@@ -1,7 +1,5 @@
 #!/usr/bin/env node
-// @ts-expect-error — MCP SDK subpath exports lack .d.ts for individual files; esbuild resolves at build time
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-// @ts-expect-error — same as above
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 
 import { NexoraClient } from './client.js';

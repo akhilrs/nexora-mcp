@@ -21952,7 +21952,11 @@ var ConfigSchema = external_exports.object({
   apiKey: external_exports.string().min(1, "NEXORA_API_KEY is required (set as environment variable)"),
   organizationId: external_exports.string().uuid("organization.id must be a valid UUID"),
   defaultProjectCode: external_exports.string().optional(),
-  requestTimeoutMs: external_exports.coerce.number().int().positive().default(3e4)
+  requestTimeoutMs: external_exports.coerce.number().int().positive().default(3e4),
+  timerAutoTrack: external_exports.preprocess(
+    (v) => v === void 0 || v === null || v === "" ? void 0 : v,
+    external_exports.union([external_exports.boolean(), external_exports.string().transform((s) => s.toLowerCase() !== "false")])
+  ).default(true)
 });
 function findConfigFile(startDir) {
   const home = homedir();
@@ -21976,11 +21980,13 @@ function loadTomlConfig(filePath) {
     const org = doc.organization;
     const project = doc.project;
     const request = doc.request;
+    const timer = doc.timer;
     return {
       apiUrl: asString(api?.url),
       organizationId: asString(org?.id),
       defaultProjectCode: asString(project?.code),
-      requestTimeoutMs: asString(request?.timeout_ms)
+      requestTimeoutMs: asString(request?.timeout_ms),
+      timerAutoTrack: asBoolean(timer?.auto_track)
     };
   } catch {
     return {};
@@ -21989,6 +21995,12 @@ function loadTomlConfig(filePath) {
 function asString(value) {
   if (value == null) return void 0;
   return String(value);
+}
+function asBoolean(value) {
+  if (value == null) return void 0;
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") return value.toLowerCase() !== "false";
+  return void 0;
 }
 function resolveFileConfig() {
   if (process.env.NEXORA_CONFIG_PATH) {
@@ -22013,7 +22025,8 @@ function buildConfig() {
     apiKey: process.env.NEXORA_API_KEY,
     organizationId: process.env.NEXORA_ORG_ID ?? fileConfig.organizationId,
     defaultProjectCode: process.env.NEXORA_PROJECT_CODE ?? fileConfig.defaultProjectCode,
-    requestTimeoutMs: process.env.NEXORA_TIMEOUT_MS ?? fileConfig.requestTimeoutMs
+    requestTimeoutMs: process.env.NEXORA_TIMEOUT_MS ?? fileConfig.requestTimeoutMs,
+    timerAutoTrack: process.env.NEXORA_TIMER_AUTO_TRACK ?? fileConfig.timerAutoTrack
   };
   const result = ConfigSchema.safeParse(merged);
   if (!result.success) {
@@ -22711,13 +22724,23 @@ id: ${entry.id}`);
     "nexora_timer_stop",
     {
       title: "Stop Timer",
-      description: "Stop the currently running timer.",
-      inputSchema: {}
+      description: "Stop a running timer scoped to a specific work item. Omit display_id to stop the freelance (no work item) timer.",
+      inputSchema: {
+        display_id: external_exports.string().optional().describe("Work item display ID (e.g., PM-42). Omit to stop the freelance timer.")
+      }
     },
-    async () => {
+    async ({ display_id }) => {
       try {
-        const entry = await client.post("/time-entries/timer/stop");
-        return toolResult(`Timer stopped: ${entry.duration_minutes}m logged
+        let workItemId = null;
+        if (display_id) {
+          const projectId = await client.requireProjectId();
+          workItemId = await client.resolveDisplayId(display_id, projectId);
+        }
+        const entry = await client.post("/time-entries/timer/stop", {
+          work_item_id: workItemId
+        });
+        const target = display_id ? ` for ${display_id}` : " (freelance)";
+        return toolResult(`Timer stopped${target}: ${entry.duration_minutes}m logged
 ${formatTimeEntry(entry)}`);
       } catch (error2) {
         return errorResult(error2);
@@ -22728,31 +22751,31 @@ ${formatTimeEntry(entry)}`);
     "nexora_timer_status",
     {
       title: "Timer Status",
-      description: "Check if a timer is currently running and show elapsed time.",
+      description: "List all currently running timers for the authenticated user with elapsed time. Returns an empty list when nothing is running.",
       inputSchema: {}
     },
     async () => {
       try {
-        const entry = await client.get("/time-entries/my-active-timer");
-        if (!entry) {
-          return toolResult("No active timer.");
+        const entries = await client.get("/time-entries/my-active-timers");
+        if (!entries || entries.length === 0) {
+          return toolResult("No active timers.");
         }
-        let elapsed = "unknown";
-        if (entry.started_at) {
-          const startMs = new Date(entry.started_at).getTime();
-          if (Number.isFinite(startMs)) {
-            const elapsedMs = Math.max(0, Date.now() - startMs);
-            const mins = Math.floor(elapsedMs / 6e4);
-            const hrs = Math.floor(mins / 60);
-            elapsed = hrs > 0 ? `${hrs}h ${mins % 60}m` : `${mins}m`;
+        const lines = [`# Active Timers (${entries.length})`];
+        for (const entry of entries) {
+          let elapsed = "unknown";
+          if (entry.started_at) {
+            const startMs = new Date(entry.started_at).getTime();
+            if (Number.isFinite(startMs)) {
+              const elapsedMs = Math.max(0, Date.now() - startMs);
+              const mins = Math.floor(elapsedMs / 6e4);
+              const hrs = Math.floor(mins / 60);
+              elapsed = hrs > 0 ? `${hrs}h ${mins % 60}m` : `${mins}m`;
+            }
           }
+          const scope = entry.work_item_id ? `work_item ${entry.work_item_id.slice(0, 8)}\u2026` : "freelance";
+          lines.push(`- ${scope} | elapsed: ${elapsed} | ${formatTimeEntry(entry)} | id: ${entry.id}`);
         }
-        return toolResult(
-          `# Active Timer
-elapsed: ${elapsed}
-${formatTimeEntry(entry)}
-id: ${entry.id}`
-        );
+        return toolResult(lines.join("\n"));
       } catch (error2) {
         return errorResult(error2);
       }
@@ -22846,6 +22869,35 @@ function cleanQuery(params) {
     if (val != null && val !== "") result[key] = String(val);
   }
   return result;
+}
+async function applyAutoTimer(client, projectId, workItemId, oldStatus, newStatus) {
+  let autoTrack = true;
+  try {
+    autoTrack = getConfig().timerAutoTrack;
+  } catch {
+    return null;
+  }
+  if (!autoTrack) return null;
+  if (oldStatus === newStatus) return null;
+  const enteringInProgress = oldStatus !== "in_progress" && newStatus === "in_progress";
+  const leavingInProgress = oldStatus === "in_progress" && newStatus !== "in_progress";
+  if (!enteringInProgress && !leavingInProgress) return null;
+  try {
+    if (enteringInProgress) {
+      const entry = await client.post("/time-entries/timer/start", {
+        project_id: projectId,
+        work_item_id: workItemId
+      });
+      return `auto-timer: started (${entry.id})`;
+    }
+    await client.post("/time-entries/timer/stop", {
+      work_item_id: workItemId
+    });
+    return "auto-timer: stopped";
+  } catch (error2) {
+    const msg = error2 instanceof Error ? error2.message : String(error2);
+    return `auto-timer: skipped \u2014 ${msg}`;
+  }
 }
 var acceptanceCriterionSchema = external_exports.object({
   criterion: external_exports.string().describe("The acceptance criterion text"),
@@ -22977,7 +23029,17 @@ ${formatWorkItem(item)}`);
     async (params) => {
       try {
         const projectId = await client.requireProjectId();
-        const uuid2 = await client.resolveDisplayId(params.display_id, projectId);
+        let uuid2;
+        let oldStatus = null;
+        if (params.status !== void 0) {
+          const current = await client.get(
+            client.workItemsPath(projectId, params.display_id)
+          );
+          uuid2 = current.id;
+          oldStatus = current.status;
+        } else {
+          uuid2 = await client.resolveDisplayId(params.display_id, projectId);
+        }
         const body = {};
         if (params.title !== void 0) body.title = params.title;
         if (params.description !== void 0) body.description = params.description;
@@ -22994,8 +23056,14 @@ ${formatWorkItem(item)}`);
           body.acceptance_criteria = params.acceptance_criteria;
         }
         const item = await client.patch(client.workItemsPath(projectId, uuid2), body);
+        let timerNote = null;
+        if (params.status !== void 0 && oldStatus !== null) {
+          timerNote = await applyAutoTimer(client, projectId, uuid2, oldStatus, item.status);
+        }
+        const suffix = timerNote ? `
+${timerNote}` : "";
         return toolResult(`Updated:
-${formatWorkItem(item)}`);
+${formatWorkItem(item)}${suffix}`);
       } catch (error2) {
         return errorResult(error2);
       }
@@ -23088,13 +23156,20 @@ ${formatWorkItem(item)}`);
     async ({ display_id, status }) => {
       try {
         const projectId = await client.requireProjectId();
-        const uuid2 = await client.resolveDisplayId(display_id, projectId);
+        const current = await client.get(
+          client.workItemsPath(projectId, display_id)
+        );
+        const uuid2 = current.id;
+        const oldStatus = current.status;
         const item = await client.patch(
           client.workItemsPath(projectId, uuid2),
           { status }
         );
+        const timerNote = await applyAutoTimer(client, projectId, uuid2, oldStatus, item.status);
+        const suffix = timerNote ? `
+${timerNote}` : "";
         return toolResult(`${display_id}: ${status}
-${formatWorkItemCompact(item)}`);
+${formatWorkItemCompact(item)}${suffix}`);
       } catch (error2) {
         return errorResult(error2);
       }
