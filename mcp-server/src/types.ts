@@ -103,6 +103,18 @@ export interface PaginatedResponse<T> {
   offset: number;
 }
 
+export interface WorkItemActivity {
+  id: string;
+  work_item_id: string;
+  activity_type: string;
+  source: string;
+  agent_name: string | null;
+  title: string;
+  content: string | null;
+  extra_data: Record<string, unknown> | null;
+  created_at: string;
+}
+
 export interface ActivityLogEntry {
   id: string;
   module: string;

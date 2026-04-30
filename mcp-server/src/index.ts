@@ -5,6 +5,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { NexoraClient } from './client.js';
 import { getConfig } from './config.js';
 import { NexoraApiError, NetworkError } from './errors.js';
+import { registerActivityTools } from './tools/activities.js';
 import { registerCommentTools } from './tools/comments.js';
 import { registerDependencyTools } from './tools/dependencies.js';
 import { registerProjectTools } from './tools/projects.js';
@@ -44,6 +45,7 @@ function createServer(): McpServer {
   registerWorkItemTools(server, client);
   registerDependencyTools(server, client);
   registerCommentTools(server, client);
+  registerActivityTools(server, client);
   registerTimeEntryTools(server, client);
   registerProjectTools(server, client);
   registerSearchActivityTools(server, client);
@@ -149,10 +151,14 @@ nexora_dep_remove         Remove dependency
 nexora_dep_list           List all deps (blocked_by + blocks)
 
 ## Comments
-nexora_comment_add        Add comment to work item
+nexora_comment_add        Add comment (human milestones: PR links, completion)
 nexora_comment_list       List comments
 nexora_comment_update     Edit comment
 nexora_comment_delete     Delete comment
+
+## Activity Log (workflow tracking)
+nexora_activity_add       Add workflow phase entry (clarify, review, ac_check, etc.)
+nexora_activity_list      List activity entries (filterable by type)
 
 ## Search & Activity
 nexora_search             Full-text search across project
