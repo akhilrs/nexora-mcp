@@ -20,6 +20,7 @@ Pick the highest priority item (lowest number = highest priority).
 Call `nexora_work_item_show` to get full context.
 Call `nexora_dep_list` to understand dependencies.
 Call `nexora_comment_list` for prior context.
+Call `nexora_activity_list` for workflow history.
 
 ### 3. Start
 Call `nexora_work_item_transition` to set status to `in_progress`.
@@ -38,7 +39,8 @@ Call `nexora_timer_start` with the display ID.
 
 ### 6. Complete
 Call `nexora_timer_stop` to log time.
-Call `nexora_comment_add` with a detailed summary:
+Call `nexora_activity_add` with activity_type `completed` and a structured summary.
+Call `nexora_comment_add` with a human-readable completion note:
 - What was done (specific changes)
 - Files modified
 - Decisions made

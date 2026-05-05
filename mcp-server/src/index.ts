@@ -173,10 +173,11 @@ nexora_quickstart         This guide
 1. nexora_work_item_ready — find what to work on
 2. nexora_work_item_show PM-42 — understand the task
 3. nexora_work_item_transition PM-42 in_progress — start
-4. nexora_comment_add PM-42 "Working on..." — track progress
+4. nexora_activity_add — log each workflow phase (activity_type: clarify, plan_review, code_review, etc.)
 5. [do the work]
-6. nexora_work_item_transition PM-42 completed — done
-7. nexora_comment_add PM-42 "Completed: summary" — close out
+6. nexora_activity_add — log completion (activity_type: completed, title: "Task completed")
+7. nexora_comment_add PM-42 "Completed: summary" — human-readable completion note
+8. nexora_work_item_transition PM-42 completed — done
 `;
 
 function formatError(error: unknown): string {
