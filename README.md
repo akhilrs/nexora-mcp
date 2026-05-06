@@ -144,6 +144,58 @@ Or via env: `NEXORA_TIMER_AUTO_TRACK=false`.
 | `/nexora:search <query>` | Search work items |
 | `/nexora:my` | Show my assignments |
 
+## Persistent Agent Memory
+
+Agents can store project insights in Nexora and retrieve them automatically at session start via `/nexora:prime`.
+
+> **Security**: never store secrets, tokens, passwords, or PII in memory items — use your secrets manager for those. Memory items are marked internal-only but are still stored in Nexora's database.
+
+### Storing an insight
+
+```
+nexora_work_item_create
+  type=task
+  title="MEMORY:<slug>"
+  tags="memory"
+  is_internal=true
+  description="<insight text>"
+```
+
+**Slug convention**: lowercase, `[a-z0-9-]` only, hyphens as separators, max 40 characters. Examples: `MEMORY:auth-token-expiry`, `MEMORY:db-pool-size`, `MEMORY:rate-limit-window`.
+
+**Upsert**: before creating, search for an existing item with the same title (case-insensitive exact match). If found, update it in place — concurrent agents writing the same slug would otherwise create conflicting duplicates.
+
+```
+nexora_search query="MEMORY:<slug>"   # check before creating
+```
+
+### Retrieving memories
+
+`/nexora:prime` surfaces memory items automatically in the **Memories** section. You can also search directly:
+
+```
+nexora_search query="MEMORY:"
+```
+
+Note: the search may return items that mention `MEMORY:` in their description, not just the title. Verify the `title` starts with `MEMORY:` before treating a result as a stored memory.
+
+### Lifecycle
+
+Memory items are regular work items scoped to the active project. Retire stale ones:
+
+- `nexora_work_item_transition status=completed` — insight is superseded or no longer relevant (preserves history)
+- `nexora_work_item_transition status=wont_do` — insight was incorrect or never valid (marks as discarded)
+
+### vs MEMORY.md
+
+| | `MEMORY.md` | Nexora memories |
+|--|--|--|
+| **Purpose** | Session gaps log — where clarification failed, so next session avoids the same mistake | Project insights — facts discovered during implementation (timeouts, constraints, gotchas) |
+| **Written by** | Workflow self-improvement loop (Phase 7 memory delta) | Any agent, any phase |
+| **Retrieved by** | Claude reads at Phase 0 start | `/nexora:prime` → Memories section |
+
+Both are complementary — use both.
+
 ## Architecture
 
 ```
