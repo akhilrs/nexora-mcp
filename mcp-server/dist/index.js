@@ -23404,10 +23404,11 @@ nexora_quickstart         This guide
 1. nexora_work_item_ready \u2014 find what to work on
 2. nexora_work_item_show PM-42 \u2014 understand the task
 3. nexora_work_item_transition PM-42 in_progress \u2014 start
-4. nexora_comment_add PM-42 "Working on..." \u2014 track progress
+4. nexora_activity_add \u2014 log each workflow phase (activity_type: clarify, plan_review, code_review, etc.)
 5. [do the work]
-6. nexora_work_item_transition PM-42 completed \u2014 done
-7. nexora_comment_add PM-42 "Completed: summary" \u2014 close out
+6. nexora_activity_add \u2014 log completion (activity_type: completed, title: "Task completed")
+7. nexora_comment_add PM-42 "Completed: summary" \u2014 human-readable completion note
+8. nexora_work_item_transition PM-42 completed \u2014 done
 `;
 function formatError2(error2) {
   if (error2 instanceof NexoraApiError) {
