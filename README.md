@@ -133,6 +133,7 @@ Or via env: `NEXORA_TIMER_AUTO_TRACK=false`.
 
 | Command | Description |
 |---------|-------------|
+| `/nexora:prime` | Load full session context in one shot (project, assignments, ready items, activity, memories) |
 | `/nexora:ready` | Find unblocked work items |
 | `/nexora:start <ID>` | Start task (transition + context) |
 | `/nexora:done <ID>` | Complete task with summary |
