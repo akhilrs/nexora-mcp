@@ -8,6 +8,7 @@ import { NexoraApiError, NetworkError } from './errors.js';
 import { registerActivityTools } from './tools/activities.js';
 import { registerCommentTools } from './tools/comments.js';
 import { registerDependencyTools } from './tools/dependencies.js';
+import { registerMessageTools } from './tools/messages.js';
 import { registerProjectTools } from './tools/projects.js';
 import { registerSearchActivityTools } from './tools/search-activity.js';
 import { registerTimeEntryTools } from './tools/time-entries.js';
@@ -45,6 +46,7 @@ function createServer(): McpServer {
   registerWorkItemTools(server, client);
   registerDependencyTools(server, client);
   registerCommentTools(server, client);
+  registerMessageTools(server, client);
   registerActivityTools(server, client);
   registerTimeEntryTools(server, client);
   registerProjectTools(server, client);
@@ -155,6 +157,15 @@ nexora_comment_add        Add comment (human milestones: PR links, completion)
 nexora_comment_list       List comments
 nexora_comment_update     Edit comment
 nexora_comment_delete     Delete comment
+
+## Project Messages (Basecamp-style board)
+nexora_message_create         Post a typed message (announcement / update / pitch / question / fyi)
+nexora_message_list           List with category / pinned / drafts filters
+nexora_message_show           Show one message by UUID
+nexora_message_update         Edit title / content / category / pin / draft
+nexora_message_delete         Delete a message
+nexora_message_comment_add    Reply on a message thread
+nexora_message_comment_list   List replies on a message
 
 ## Activity Log (workflow tracking)
 nexora_activity_add       Add workflow phase entry (clarify, review, ac_check, etc.)

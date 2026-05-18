@@ -26,6 +26,22 @@ export interface WorkItem {
   updated_at: string;
 }
 
+export type MessageCategory = 'announcement' | 'update' | 'pitch' | 'question' | 'fyi';
+
+export interface Message {
+  id: string;
+  organization_id: string;
+  project_id: string;
+  title: string;
+  content: string;
+  category: MessageCategory;
+  author_id: string | null;
+  is_pinned: boolean;
+  is_draft: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Comment {
   id: string;
   organization_id: string;

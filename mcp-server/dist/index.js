@@ -22402,6 +22402,276 @@ relates_to (${relatesTo.length}):`);
   );
 }
 
+// src/tools/messages.ts
+var CATEGORIES = [
+  "announcement",
+  "update",
+  "pitch",
+  "question",
+  "fyi"
+];
+function messagesPath(projectId, ...segments) {
+  const base = `/projects/${encodeURIComponent(projectId)}/messages`;
+  if (segments.length === 0) return base;
+  return `${base}/${segments.map((s) => encodeURIComponent(s)).join("/")}`;
+}
+function formatMessage(m) {
+  const date3 = m.created_at?.slice(0, 16).replace("T", " ") ?? "";
+  const flags = [m.is_pinned ? "pinned" : "", m.is_draft ? "draft" : ""].filter(Boolean).join(", ");
+  const tail = flags ? ` (${flags})` : "";
+  return [
+    `[${date3}] ${m.category.toUpperCase()}${tail}`,
+    `${m.id}  ${m.title}`,
+    (m.content ?? "").slice(0, 300)
+  ].join("\n");
+}
+function formatMessageRow(m) {
+  const date3 = m.created_at?.slice(0, 10) ?? "";
+  const pin = m.is_pinned ? "\u{1F4CC} " : "";
+  const draft = m.is_draft ? " [DRAFT]" : "";
+  return `${date3}  ${m.category.padEnd(12)}  ${pin}${m.title}${draft}
+        ${m.id}`;
+}
+function formatComment2(c) {
+  const date3 = c.created_at?.slice(0, 16).replace("T", " ") ?? "";
+  const flags = [c.is_ai_generated ? "ai" : "", c.is_internal ? "internal" : "public"].filter(Boolean).join(", ");
+  return `[${date3}] (${flags}) ${(c.content ?? "").slice(0, 500)}`;
+}
+function registerMessageTools(server, client) {
+  server.registerTool(
+    "nexora_message_create",
+    {
+      title: "Create Project Message",
+      description: "Post a project-level message (Basecamp-style board). Use category to type the post: announcement, update, pitch, question, fyi.",
+      inputSchema: {
+        title: external_exports.string().min(1).max(500).describe("Message title"),
+        content: external_exports.string().min(1).describe("Message body (markdown supported)"),
+        category: external_exports.enum(CATEGORIES).default("update").describe("Type of message"),
+        is_pinned: external_exports.boolean().default(false).describe("Pin to top of the message board"),
+        is_draft: external_exports.boolean().default(false).describe("Save as draft (not visible to the team yet)")
+      }
+    },
+    async ({
+      title,
+      content,
+      category,
+      is_pinned,
+      is_draft
+    }) => {
+      try {
+        const projectId = await client.requireProjectId();
+        const msg = await client.post(messagesPath(projectId), {
+          title,
+          content,
+          category,
+          is_pinned,
+          is_draft
+        });
+        return toolResult(`Message created:
+${formatMessage(msg)}`);
+      } catch (error2) {
+        return errorResult(error2);
+      }
+    }
+  );
+  server.registerTool(
+    "nexora_message_list",
+    {
+      title: "List Project Messages",
+      description: "List messages on the current project. NOTE: `limit`/`offset` are sent to the backend; `category` and `pinned_only` are applied client-side AFTER the page is fetched, so the returned list can be shorter than `limit` even when more matches exist on later pages. When filtering, raise `limit` toward the backend max (200) to widen the search window.",
+      inputSchema: {
+        category: external_exports.enum(CATEGORIES).optional().describe("Filter to a single category"),
+        pinned_only: external_exports.boolean().default(false).describe("Return only pinned messages"),
+        include_drafts: external_exports.boolean().default(false).describe("Include draft messages in the result"),
+        limit: external_exports.number().int().min(1).max(200).default(50).describe("Max messages to fetch (1-200)"),
+        offset: external_exports.number().int().min(0).default(0).describe("Pagination offset")
+      }
+    },
+    async ({
+      category,
+      pinned_only,
+      include_drafts,
+      limit,
+      offset
+    }) => {
+      try {
+        const projectId = await client.requireProjectId();
+        const msgs = await client.get(messagesPath(projectId), {
+          include_drafts: String(include_drafts),
+          limit: String(limit),
+          offset: String(offset)
+        });
+        const filtered = msgs.filter((m) => {
+          if (category && m.category !== category) return false;
+          if (pinned_only && !m.is_pinned) return false;
+          return true;
+        });
+        if (filtered.length === 0) {
+          return toolResult("No messages match the filter.");
+        }
+        const lines = filtered.map(formatMessageRow);
+        const head = `${filtered.length} message${filtered.length === 1 ? "" : "s"}` + (category ? ` \xB7 category=${category}` : "") + (pinned_only ? " \xB7 pinned only" : "") + (include_drafts ? " \xB7 drafts included" : "");
+        return toolResult(`${head}
+
+${lines.join("\n\n")}`);
+      } catch (error2) {
+        return errorResult(error2);
+      }
+    }
+  );
+  server.registerTool(
+    "nexora_message_show",
+    {
+      title: "Show Project Message",
+      description: "Show a single project message by UUID.",
+      inputSchema: {
+        message_id: external_exports.string().describe("Message UUID")
+      }
+    },
+    async ({ message_id }) => {
+      try {
+        const projectId = await client.requireProjectId();
+        const msg = await client.get(messagesPath(projectId, message_id));
+        return toolResult(formatMessage(msg));
+      } catch (error2) {
+        return errorResult(error2);
+      }
+    }
+  );
+  server.registerTool(
+    "nexora_message_update",
+    {
+      title: "Update Project Message",
+      description: "Patch any subset of fields on a project message. Omit a field to leave it unchanged. Use this to pin/unpin, publish a draft, or recategorize.",
+      inputSchema: {
+        message_id: external_exports.string().describe("Message UUID"),
+        title: external_exports.string().min(1).max(500).optional(),
+        content: external_exports.string().min(1).optional(),
+        category: external_exports.enum(CATEGORIES).optional(),
+        is_pinned: external_exports.boolean().optional(),
+        is_draft: external_exports.boolean().optional()
+      }
+    },
+    async ({
+      message_id,
+      title,
+      content,
+      category,
+      is_pinned,
+      is_draft
+    }) => {
+      try {
+        const projectId = await client.requireProjectId();
+        const patch = {};
+        if (title !== void 0) patch.title = title;
+        if (content !== void 0) patch.content = content;
+        if (category !== void 0) patch.category = category;
+        if (is_pinned !== void 0) patch.is_pinned = is_pinned;
+        if (is_draft !== void 0) patch.is_draft = is_draft;
+        if (Object.keys(patch).length === 0) {
+          return errorResult(new Error("No fields to update \u2014 pass at least one field."));
+        }
+        const msg = await client.patch(messagesPath(projectId, message_id), patch);
+        return toolResult(`Message updated:
+${formatMessage(msg)}`);
+      } catch (error2) {
+        return errorResult(error2);
+      }
+    }
+  );
+  server.registerTool(
+    "nexora_message_delete",
+    {
+      title: "Delete Project Message",
+      description: "Permanently delete a project message. Requires `confirm: true`. There is no soft-delete or undo \u2014 the row is removed.",
+      inputSchema: {
+        message_id: external_exports.string().describe("Message UUID"),
+        confirm: external_exports.literal(true).describe("Must be true. Guards against accidental or prompt-injected deletes.")
+      }
+    },
+    async ({ message_id, confirm }) => {
+      try {
+        if (!confirm) {
+          return errorResult(new Error("Refusing to delete without confirm:true."));
+        }
+        const projectId = await client.requireProjectId();
+        let label = message_id;
+        try {
+          const existing = await client.get(messagesPath(projectId, message_id));
+          label = `${existing.id} \u2014 ${existing.title} (${existing.category})`;
+        } catch {
+        }
+        await client.delete(messagesPath(projectId, message_id));
+        return toolResult(`Deleted: ${label}.`);
+      } catch (error2) {
+        return errorResult(error2);
+      }
+    }
+  );
+  server.registerTool(
+    "nexora_message_comment_add",
+    {
+      title: "Comment on Project Message",
+      description: "Reply to a project message with a comment (markdown supported).",
+      inputSchema: {
+        message_id: external_exports.string().describe("Message UUID"),
+        content: external_exports.string().min(1).describe("Comment content (markdown supported)"),
+        is_internal: external_exports.boolean().default(true).describe("Internal comment (hidden from external stakeholders)"),
+        is_ai_generated: external_exports.boolean().default(true).describe(
+          "Mark this comment as AI-authored. Defaults to true since this tool is invoked by Claude; set false when scripting on behalf of a human user."
+        )
+      }
+    },
+    async ({
+      message_id,
+      content,
+      is_internal,
+      is_ai_generated
+    }) => {
+      try {
+        const projectId = await client.requireProjectId();
+        const comment = await client.post(
+          messagesPath(projectId, message_id, "comments"),
+          { content, is_internal, is_ai_generated }
+        );
+        return toolResult(`Reply posted on message ${message_id}:
+${formatComment2(comment)}`);
+      } catch (error2) {
+        return errorResult(error2);
+      }
+    }
+  );
+  server.registerTool(
+    "nexora_message_comment_list",
+    {
+      title: "List Comments on Project Message",
+      description: "List replies on a project message.",
+      inputSchema: {
+        message_id: external_exports.string().describe("Message UUID"),
+        limit: external_exports.number().int().min(1).max(200).default(50).describe("Max comments to return")
+      }
+    },
+    async ({ message_id, limit }) => {
+      try {
+        const projectId = await client.requireProjectId();
+        const comments = await client.get(
+          messagesPath(projectId, message_id, "comments")
+        );
+        const sliced = comments.slice(0, limit);
+        if (sliced.length === 0) {
+          return toolResult("No comments on this message yet.");
+        }
+        const lines = sliced.map(formatComment2).join("\n");
+        return toolResult(`${sliced.length} comment${sliced.length === 1 ? "" : "s"}:
+
+${lines}`);
+      } catch (error2) {
+        return errorResult(error2);
+      }
+    }
+  );
+}
+
 // src/tools/projects.ts
 function formatProject(p) {
   const lines = [
@@ -23284,6 +23554,7 @@ function createServer() {
   registerWorkItemTools(server, client);
   registerDependencyTools(server, client);
   registerCommentTools(server, client);
+  registerMessageTools(server, client);
   registerActivityTools(server, client);
   registerTimeEntryTools(server, client);
   registerProjectTools(server, client);
@@ -23386,6 +23657,15 @@ nexora_comment_add        Add comment (human milestones: PR links, completion)
 nexora_comment_list       List comments
 nexora_comment_update     Edit comment
 nexora_comment_delete     Delete comment
+
+## Project Messages (Basecamp-style board)
+nexora_message_create         Post a typed message (announcement / update / pitch / question / fyi)
+nexora_message_list           List with category / pinned / drafts filters
+nexora_message_show           Show one message by UUID
+nexora_message_update         Edit title / content / category / pin / draft
+nexora_message_delete         Delete a message
+nexora_message_comment_add    Reply on a message thread
+nexora_message_comment_list   List replies on a message
 
 ## Activity Log (workflow tracking)
 nexora_activity_add       Add workflow phase entry (clarify, review, ac_check, etc.)
