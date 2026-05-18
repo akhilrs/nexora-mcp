@@ -1,7 +1,7 @@
 {
   "name": "@nexora/mcp",
-  "version": "0.8.0",
-  "description": "MCP server for Nexora HRM — Project Management agent integration",
+  "version": "0.9.0",
+  "description": "MCP server for Nexora HRM \u2014 Project Management agent integration",
   "type": "module",
   "main": "dist/index.js",
   "bin": {

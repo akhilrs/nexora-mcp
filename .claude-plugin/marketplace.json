@@ -14,8 +14,8 @@
         "source": "github",
         "repo": "akhilrs/nexora-mcp"
       },
-      "description": "AI-native project management — work items, dependencies, comments, time tracking, and search powered by Nexora HRM.",
-      "version": "0.8.0",
+      "description": "AI-native project management \u2014 work items, dependencies, comments, time tracking, and search powered by Nexora HRM.",
+      "version": "0.9.0",
       "author": {
         "name": "Akhil RS"
       }

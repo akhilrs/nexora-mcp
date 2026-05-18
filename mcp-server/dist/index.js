@@ -23532,7 +23532,7 @@ ${formatWorkItemCompact(item)}${suffix}`);
 }
 
 // src/index.ts
-var VERSION = "0.7.0";
+var VERSION = "0.9.0";
 function createLazyClient() {
   let _client = null;
   return new Proxy({}, {
