@@ -5,8 +5,8 @@
         "matcher": "*",
         "hooks": [
           {
-            "type": "prompt",
-            "prompt": "Use the Nexora MCP tools to show session context:\n1. Call nexora_context to verify connection\n2. Call nexora_timer_status to check for active timer\n3. Call nexora_work_item_list with status=in_progress to show active work\n4. Briefly summarize: active project, in-progress items, timer status\n\nKeep the output concise — 3-5 lines maximum."
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start.mjs\""
           }
         ]
       }
