@@ -170,6 +170,7 @@ nexora_message_comment_list   List replies on a message
 ## Activity Log (workflow tracking)
 nexora_activity_add       Add workflow phase entry (clarify, review, ac_check, etc.)
 nexora_activity_list      List activity entries (filterable by type)
+nexora_activity_show      Show one activity entry with FULL content (no truncation)
 
 ## Search & Activity
 nexora_search             Full-text search across project

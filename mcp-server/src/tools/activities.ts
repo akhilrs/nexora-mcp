@@ -65,7 +65,7 @@ export function registerActivityTools(server: any, client: NexoraClient): void {
     'nexora_activity_list',
     {
       title: 'List Activities',
-      description: 'List workflow activity entries on a work item.',
+      description: 'List workflow activity entries on a work item. Content is truncated to 200 chars per entry — use nexora_activity_show with the entry id for full content.',
       inputSchema: {
         display_id: z.string().describe('Work item display ID (e.g., PM-42)'),
         activity_type: z.string().optional().describe('Filter by type (e.g., code_review)'),
@@ -98,6 +98,53 @@ export function registerActivityTools(server: any, client: NexoraClient): void {
           lines.push(`  id: ${a.id}`);
         }
 
+        return toolResult(lines.join('\n'));
+      } catch (error) {
+        return errorResult(error);
+      }
+    },
+  );
+
+  // 3. SHOW ACTIVITY (full content, no truncation)
+  server.registerTool(
+    'nexora_activity_show',
+    {
+      title: 'Show Activity',
+      description: 'Show a single workflow activity entry by id, returning the FULL content (no truncation). Use when nexora_activity_list previews are cut off at 200 chars and you need the complete body of a specific activity (e.g. a long code-review or retrospective entry).',
+      inputSchema: {
+        display_id: z.string().describe('Work item display ID (e.g., PM-42)'),
+        activity_id: z.string().uuid().describe('Activity UUID (from nexora_activity_list output)'),
+        include_extra_data: z.boolean().default(true).describe('Include the extra_data JSON block in the response. Default true. Set false when extra_data may contain noise or sensitive metadata you do not want surfaced.'),
+      },
+    },
+    async ({ display_id, activity_id, include_extra_data }: { display_id: string; activity_id: string; include_extra_data: boolean }) => {
+      try {
+        const projectId = await client.requireProjectId();
+        const itemUuid = await client.resolveDisplayId(display_id, projectId);
+
+        const activity = await client.get<WorkItemActivity>(
+          client.workItemsPath(projectId, itemUuid, 'activities', activity_id),
+        );
+
+        const lines = [
+          `# Activity ${activity.id} on ${display_id}`,
+          '',
+          formatActivity(activity),
+          '',
+        ];
+        if (activity.content) {
+          lines.push('## Content', '', activity.content);
+        }
+        if (include_extra_data && activity.extra_data && Object.keys(activity.extra_data).length > 0) {
+          lines.push(
+            '',
+            '## Extra data',
+            '',
+            '```json',
+            JSON.stringify(activity.extra_data, null, 2),
+            '```',
+          );
+        }
         return toolResult(lines.join('\n'));
       } catch (error) {
         return errorResult(error);
