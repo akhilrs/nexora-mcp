@@ -22955,7 +22955,7 @@ function formatWorkItem(item) {
   if (item.stream_id) lines.push(`stream_id: ${item.stream_id}`);
   if (item.tags?.length) lines.push(`tags: ${item.tags.join(", ")}`);
   if (item.description) {
-    lines.push(`description: ${esc2(item.description).slice(0, 500)}`);
+    lines.push(`description: ${esc2(item.description)}`);
   }
   if (item.acceptance_criteria?.length) {
     lines.push(`acceptance_criteria:`);
