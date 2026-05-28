@@ -250,6 +250,175 @@ export class NexoraClient {
         return new NexoraApiError(message, status, code, details);
     }
   }
+
+  // PM-327: getBytes — raw binary download with redirect inspection + byte cap.
+  // Used by nexora_attachment_download to follow Nexora's 302 to a signed
+  // storage URL (s3.qs0.dev by default), validate the redirect target, then
+  // stream bytes with a hard byte budget. Server-side SSRF defense:
+  // - HTTPS-only on every hop
+  // - Host allowlist (canonicalized: lowercase + strip trailing dot)
+  // - Rejects IPv4/IPv6 literals + userinfo in redirect Location
+  // - Accept-Encoding: identity to prevent gzip-bomb amplification
+  // - Streaming byte cap (does NOT trust Content-Length as ground truth)
+  // - connect + body timeouts via AbortController
+  async getBytes(path: string, opts: {
+    maxBytes: number;
+    allowedRedirectHosts: string[];
+    connectTimeoutMs?: number;
+    bodyTimeoutMs?: number;
+    maxRedirectHops?: number;
+  }): Promise<{ bytes: Buffer; mimeType: string; sha256: string; hops: number }> {
+    const crypto = await import('node:crypto');
+    const connectTimeout = opts.connectTimeoutMs ?? 10000;
+    const bodyTimeout = opts.bodyTimeoutMs ?? 60000;
+    const maxHops = opts.maxRedirectHops ?? 2;
+    // Canonicalize allowlist (defense-in-depth: don't trust caller to have done it)
+    const allowedHosts = opts.allowedRedirectHosts
+      .map((h) => h.trim().toLowerCase().replace(/\.+$/, ''))
+      .filter(Boolean);
+
+    let currentUrl = `${this.baseUrl}${path.startsWith('/') ? path : `/${path}`}`;
+    let useAuth = true;
+    let hops = 0;
+
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const controller = new AbortController();
+      const connectTimer = setTimeout(() => controller.abort(), connectTimeout);
+
+      const headers: Record<string, string> = {
+        'Accept-Encoding': 'identity',
+      };
+      if (useAuth) {
+        headers['Authorization'] = `Bearer ${this.apiKey}`;
+        headers['X-Organization-ID'] = this.organizationId;
+      }
+
+      let response: Response;
+      try {
+        response = await fetch(currentUrl, {
+          method: 'GET',
+          headers,
+          redirect: 'manual',
+          signal: controller.signal,
+        });
+      } catch (err) {
+        clearTimeout(connectTimer);
+        if (err instanceof DOMException && err.name === 'AbortError') {
+          throw new NetworkError(`getBytes connect timed out after ${connectTimeout}ms`);
+        }
+        if (err instanceof TypeError) {
+          throw new NetworkError(`getBytes network error: ${err.message}`, err);
+        }
+        throw err;
+      }
+      clearTimeout(connectTimer);
+
+      if ([301, 302, 303, 307, 308].includes(response.status)) {
+        hops++;
+        if (hops > maxHops) {
+          throw new NetworkError(`getBytes exceeded ${maxHops} redirect hops`);
+        }
+        const location = response.headers.get('location');
+        if (!location || location.trim().length === 0) {
+          throw new NetworkError(`${response.status} redirect missing Location header`);
+        }
+        let nextUrl: URL;
+        try {
+          nextUrl = new URL(location, currentUrl);
+        } catch {
+          throw new NetworkError(`invalid redirect URL: ${location.slice(0, 120)}`);
+        }
+        if (nextUrl.protocol !== 'https:') {
+          throw new NetworkError(`redirect to non-https scheme: ${nextUrl.protocol}`);
+        }
+        if (nextUrl.username || nextUrl.password) {
+          throw new NetworkError(`redirect contains userinfo — refused`);
+        }
+        let host = nextUrl.hostname.toLowerCase();
+        if (host.endsWith('.')) host = host.replace(/\.+$/, '');
+        if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) {
+          throw new NetworkError(`redirect to IPv4 literal refused: ${host}`);
+        }
+        if (host.startsWith('[') || host.includes(':')) {
+          throw new NetworkError(`redirect to IPv6 literal refused: ${host}`);
+        }
+        // #5: constrain port — default 443 only (no s3.qs0.dev:4443 bypass)
+        if (nextUrl.port !== '' && nextUrl.port !== '443') {
+          throw new NetworkError(`redirect to non-default port refused: ${nextUrl.port}`);
+        }
+        if (!allowedHosts.includes(host)) {
+          throw new NetworkError(
+            `redirect to disallowed host: ${host} (allowed: ${allowedHosts.join(', ')})`,
+          );
+        }
+        currentUrl = nextUrl.href;
+        useAuth = false;
+        try { await response.body?.cancel(); } catch { /* swallow */ }
+        continue;
+      }
+
+      if (!response.ok) {
+        try { await response.body?.cancel(); } catch { /* swallow */ }
+        throw new NetworkError(`getBytes failed: ${response.status} ${response.statusText}`);
+      }
+
+      const declared = response.headers.get('content-length');
+      if (declared) {
+        const declaredN = parseInt(declared, 10);
+        if (!isNaN(declaredN) && declaredN > opts.maxBytes) {
+          throw new NetworkError(
+            `Content-Length ${declaredN} exceeds byte budget ${opts.maxBytes}`,
+          );
+        }
+      }
+
+      const mimeType = (response.headers.get('content-type') ?? 'application/octet-stream')
+        .split(';')[0]
+        .trim();
+
+      if (!response.body) {
+        throw new NetworkError('getBytes: no response body');
+      }
+
+      const hash = crypto.createHash('sha256');
+      const reader = response.body.getReader();
+      const chunks: Buffer[] = [];
+      let total = 0;
+      const bodyTimer = setTimeout(() => controller.abort(), bodyTimeout);
+      try {
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          total += value.byteLength;
+          if (total > opts.maxBytes) {
+            try { await reader.cancel(); } catch { /* swallow */ }
+            throw new NetworkError(
+              `streamed bytes exceeded budget during download (cap ${opts.maxBytes})`,
+            );
+          }
+          const buf = Buffer.from(value);
+          hash.update(buf);
+          chunks.push(buf);
+        }
+      } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') {
+          throw new NetworkError(`getBytes body read timed out after ${bodyTimeout}ms`);
+        }
+        throw err;
+      } finally {
+        clearTimeout(bodyTimer);
+      }
+
+      return {
+        bytes: Buffer.concat(chunks, total),
+        mimeType,
+        sha256: hash.digest('hex'),
+        hops,
+      };
+    }
+  }
 }
 
 function sleep(ms: number): Promise<void> {
