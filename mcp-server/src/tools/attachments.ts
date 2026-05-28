@@ -10,10 +10,14 @@
 //       and comment-attached, distinguished via the derived `parent` field).
 //
 //   nexora_attachment_download { display_id, attachment_id }
-//     → hybrid result:
-//       - inline base64 if size < 2 MiB (raw bytes)
-//       - path to a tmpdir file if 2 MiB ≤ size ≤ 10 MiB
-//       - error if size > 10 MiB (the published cap from PM-326)
+//     → result: path to a tmpdir file containing the downloaded bytes
+//       (${TMPDIR}/nexora-mcp-attachments/<sha256>.<ext>). Agent uses the
+//       Read tool on the path — handles images natively via multimodal Read.
+//       Rejects files > 10 MiB (the published cap from PM-326).
+//       PM-329: dropped the previous inline-base64 branch entirely; MCP
+//       transport's per-response token cap was too tight for the 2 MiB raw
+//       threshold to be useful in practice (316 KB raw → 421 KB base64 →
+//       transport-cap fallback on every real attachment).
 //     Storage host allowlist defaults to ['s3.qs0.dev']; override via env var
 //     NEXORA_ATTACHMENT_HOSTS=host1,host2,... for self-hosted deployments.
 
@@ -28,7 +32,6 @@ import { formatAttachment, esc } from '../formatters.js';
 import { createHash } from 'node:crypto';
 import { errorResult, toolResult } from './helpers.js';
 
-const INLINE_THRESHOLD_BYTES = 2 * 1024 * 1024;  // 2 MiB
 const MAX_BYTES = 10 * 1024 * 1024;               // 10 MiB hard cap (PM-326 spec)
 
 // Fixed MIME → extension map. Extension comes from this map, NEVER from the
@@ -164,8 +167,14 @@ export function registerAttachmentTools(server: any, client: NexoraClient): void
       title: 'Download Attachment',
       description:
         'Download an attachment with server-side SSRF + byte-budget enforcement. ' +
-        'Returns hybrid output: inline base64 (single-line) for files <2 MiB; a tmpdir path ' +
-        '(${TMPDIR}/nexora-mcp-attachments/<sha256>.<ext>) for files 2 MiB–10 MiB. ' +
+        'Downloads the attachment server-side (SSRF + byte-budget enforced) and ' +
+        'writes bytes to a tmpdir path (${TMPDIR}/nexora-mcp-attachments/<sha256>.<ext>). ' +
+        'Agent uses Read on the returned path — handles images natively via multimodal Read. ' +
+        'POSIX paths only (the `path:` field is NOT esc-unescaped for Windows backslashes; ' +
+        'agents on POSIX hosts use it verbatim). Requires the agent + MCP server to share a ' +
+        'filesystem — typical stdio deployment. Remote MCP deployments where filesystem is ' +
+        'not shared would need a different tool variant returning bytes via MCP dynamic-resource ' +
+        'semantics (readResource), not in scope for this version. ' +
         'Rejects files >10 MiB. Follows Nexora\'s signed-URL redirect (302 → ' +
         's3.qs0.dev by default; configurable via NEXORA_ATTACHMENT_HOSTS env var).',
       inputSchema: {
@@ -201,17 +210,10 @@ export function registerAttachmentTools(server: any, client: NexoraClient): void
           `redirect_hops: ${result.hops}`,
         ];
 
-        if (size < INLINE_THRESHOLD_BYTES) {
-          // Inline base64 — agent decodes for analysis.
-          const b64 = result.bytes.toString('base64');
-          header.push(`mode: inline-base64`);
-          header.push(``);
-          header.push(`base64:`);
-          header.push(b64);
-          return toolResult(header.join('\n'));
-        }
-
-        // ≥2 MiB: write to tmpdir, return path. Agent uses Read on the path.
+        // Always write to tmpdir + return path (PM-329 — removed inline base64
+        // branch; MCP per-response token cap is tighter than the 2 MiB raw
+        // threshold could ever fit). Agent uses Read on the path — Claude's
+        // multimodal Read handles images natively.
         const filePath = await writeAttachmentAtomically(
           result.bytes,
           result.sha256,

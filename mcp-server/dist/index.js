@@ -22377,7 +22377,7 @@ var PRIORITY_LABELS = {
 };
 function esc2(value) {
   if (!value) return "";
-  return value.replace(/\r/g, "\\r").replace(/\n/g, "\\n").replace(/\x00/g, "\\0").replace(/\x1b/g, "\\x1b").replace(/[\u2028\u2029]/g, "\\u2028").replace(/:/g, "\\:");
+  return value.replace(/\\/g, "\\\\").replace(/\r/g, "\\r").replace(/\n/g, "\\n").replace(/\x00/g, "\\0").replace(/\x1b/g, "\\x1b").replace(/[\u2028\u2029]/g, "\\u2028").replace(/:/g, "\\:");
 }
 function formatDate(iso) {
   if (!iso) return "";
@@ -22445,7 +22445,6 @@ function formatAttachment(a) {
 
 // src/tools/attachments.ts
 import { createHash } from "node:crypto";
-var INLINE_THRESHOLD_BYTES = 2 * 1024 * 1024;
 var MAX_BYTES = 10 * 1024 * 1024;
 var MIME_TO_EXT = {
   "image/png": "png",
@@ -22544,7 +22543,7 @@ function registerAttachmentTools(server, client) {
     "nexora_attachment_download",
     {
       title: "Download Attachment",
-      description: "Download an attachment with server-side SSRF + byte-budget enforcement. Returns hybrid output: inline base64 (single-line) for files <2 MiB; a tmpdir path (${TMPDIR}/nexora-mcp-attachments/<sha256>.<ext>) for files 2 MiB\u201310 MiB. Rejects files >10 MiB. Follows Nexora's signed-URL redirect (302 \u2192 s3.qs0.dev by default; configurable via NEXORA_ATTACHMENT_HOSTS env var).",
+      description: "Download an attachment with server-side SSRF + byte-budget enforcement. Downloads the attachment server-side (SSRF + byte-budget enforced) and writes bytes to a tmpdir path (${TMPDIR}/nexora-mcp-attachments/<sha256>.<ext>). Agent uses Read on the returned path \u2014 handles images natively via multimodal Read. POSIX paths only (the `path:` field is NOT esc-unescaped for Windows backslashes; agents on POSIX hosts use it verbatim). Requires the agent + MCP server to share a filesystem \u2014 typical stdio deployment. Remote MCP deployments where filesystem is not shared would need a different tool variant returning bytes via MCP dynamic-resource semantics (readResource), not in scope for this version. Rejects files >10 MiB. Follows Nexora's signed-URL redirect (302 \u2192 s3.qs0.dev by default; configurable via NEXORA_ATTACHMENT_HOSTS env var).",
       inputSchema: {
         display_id: external_exports.string().trim().min(1).describe("Work item display ID (parent context for the URL)"),
         attachment_id: external_exports.string().trim().uuid().describe("Attachment UUID (from nexora_attachment_list)")
@@ -22573,14 +22572,6 @@ function registerAttachmentTools(server, client) {
           `sha256: ${esc2(result.sha256)}`,
           `redirect_hops: ${result.hops}`
         ];
-        if (size < INLINE_THRESHOLD_BYTES) {
-          const b64 = result.bytes.toString("base64");
-          header.push(`mode: inline-base64`);
-          header.push(``);
-          header.push(`base64:`);
-          header.push(b64);
-          return toolResult(header.join("\n"));
-        }
         const filePath = await writeAttachmentAtomically(
           result.bytes,
           result.sha256,
@@ -23917,7 +23908,7 @@ ${formatWorkItemCompact(item)}${suffix}`);
 }
 
 // src/index.ts
-var VERSION = "0.10.0";
+var VERSION = "0.10.1";
 function createLazyClient() {
   let _client = null;
   return new Proxy({}, {
