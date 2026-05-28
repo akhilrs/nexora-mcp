@@ -88,6 +88,12 @@ export interface TimeEntry {
   approval_status: 'pending' | 'approved' | 'rejected';
   created_at: string;
   updated_at: string;
+  // PM-407 pause/resume + PM-418: backend exposes these on the time-entry
+  // schema (see src/schemas/time_entry.py). Optional so callers tolerate
+  // older API responses that pre-date the columns.
+  paused_at?: string | null;
+  accumulated_minutes?: number;
+  pause_reason?: string | null;
 }
 
 export interface Stream {

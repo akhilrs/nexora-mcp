@@ -23408,10 +23408,21 @@ function registerSearchActivityTools(server, client) {
 }
 
 // src/tools/time-entries.ts
+function formatHoursMinutes(totalMins) {
+  const m = Math.max(0, Math.floor(totalMins));
+  const hrs = Math.floor(m / 60);
+  return hrs > 0 ? `${hrs}h ${m % 60}m` : `${m}m`;
+}
 function formatTimeEntry(e) {
-  const duration3 = e.is_running ? `running since ${e.started_at?.slice(11, 16) ?? "?"}` : `${e.duration_minutes}m`;
   const billable = e.is_billable ? "billable" : "non-billable";
-  return `${e.date} | ${duration3} | ${billable} | ${e.description ?? "(no description)"} | ${e.approval_status}`;
+  const desc = (e.description ?? "(no description)").replace(/[\r\n]+/g, " ").replace(/\|/g, "\\|");
+  if (e.is_running) {
+    return `${e.date} | running since ${e.started_at?.slice(11, 16) ?? "?"} | ${billable} | ${desc}`;
+  }
+  if (e.paused_at && !e.ended_at) {
+    return `${e.date} | paused since ${e.paused_at.slice(11, 16)} | ${billable} | ${desc}`;
+  }
+  return `${e.date} | ${formatHoursMinutes(e.duration_minutes)} | ${billable} | ${desc} | ${e.approval_status}`;
 }
 function registerTimeEntryTools(server, client) {
   server.registerTool(
@@ -23476,7 +23487,7 @@ ${formatTimeEntry(entry)}`);
     "nexora_timer_status",
     {
       title: "Timer Status",
-      description: "List all currently running timers for the authenticated user with elapsed time. Returns an empty list when nothing is running.",
+      description: "List all currently active timers (running or paused, not yet finalized) for the authenticated user. Returns an empty list when nothing is active.",
       inputSchema: {}
     },
     async () => {
@@ -23488,14 +23499,17 @@ ${formatTimeEntry(entry)}`);
         const lines = [`# Active Timers (${entries.length})`];
         for (const entry of entries) {
           let elapsed = "unknown";
-          if (entry.started_at) {
+          if (entry.is_running && entry.started_at) {
             const startMs = new Date(entry.started_at).getTime();
             if (Number.isFinite(startMs)) {
-              const elapsedMs = Math.max(0, Date.now() - startMs);
-              const mins = Math.floor(elapsedMs / 6e4);
-              const hrs = Math.floor(mins / 60);
-              elapsed = hrs > 0 ? `${hrs}h ${mins % 60}m` : `${mins}m`;
+              const sinceStartMins = Math.floor((Date.now() - startMs) / 6e4);
+              const totalMins = (entry.accumulated_minutes ?? 0) + Math.max(0, sinceStartMins);
+              elapsed = `${formatHoursMinutes(totalMins)} (live)`;
             }
+          } else if (entry.paused_at && !entry.ended_at) {
+            elapsed = `${formatHoursMinutes(entry.accumulated_minutes ?? 0)} (paused)`;
+          } else if (entry.duration_minutes > 0) {
+            elapsed = formatHoursMinutes(entry.duration_minutes);
           }
           const scope = entry.work_item_id ? `work_item ${entry.work_item_id.slice(0, 8)}\u2026` : "freelance";
           lines.push(`- ${scope} | elapsed: ${elapsed} | ${formatTimeEntry(entry)} | id: ${entry.id}`);
