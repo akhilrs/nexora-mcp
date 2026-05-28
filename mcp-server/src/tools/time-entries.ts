@@ -4,12 +4,34 @@ import type { NexoraClient } from '../client.js';
 import type { TimeEntry } from '../types.js';
 import { errorResult, toolResult } from './helpers.js';
 
+function formatHoursMinutes(totalMins: number): string {
+  const m = Math.max(0, Math.floor(totalMins));
+  const hrs = Math.floor(m / 60);
+  return hrs > 0 ? `${hrs}h ${m % 60}m` : `${m}m`;
+}
+
+// PM-418: a TimeEntry returned by /my-active-timers can be in three states:
+//   - is_running=true                              -> actively counting
+//   - is_running=false, paused_at!=null, !ended_at -> paused, snapshot accumulated_minutes
+//   - is_running=false, ended_at!=null             -> finalized (also: history rows)
+// Old formatter labelled all three with `running since ${started_at}` or just
+// `${duration_minutes}m`, conflating paused with running and showing 0m for
+// pending pauses. Approval status was always shown, but for in-flight
+// (running/paused) entries it's always "pending" and adds visual noise that
+// looked like a state flag. We now drop approval_status from the in-flight
+// path and only render it for finalized entries.
 function formatTimeEntry(e: TimeEntry): string {
-  const duration = e.is_running
-    ? `running since ${e.started_at?.slice(11, 16) ?? '?'}`
-    : `${e.duration_minutes}m`;
   const billable = e.is_billable ? 'billable' : 'non-billable';
-  return `${e.date} | ${duration} | ${billable} | ${e.description ?? '(no description)'} | ${e.approval_status}`;
+  // Sanitize user-controlled description so newlines and pipe characters
+  // don't break the table-like single-line output (Codex review #4).
+  const desc = (e.description ?? '(no description)').replace(/[\r\n]+/g, ' ').replace(/\|/g, '\\|');
+  if (e.is_running) {
+    return `${e.date} | running since ${e.started_at?.slice(11, 16) ?? '?'} | ${billable} | ${desc}`;
+  }
+  if (e.paused_at && !e.ended_at) {
+    return `${e.date} | paused since ${e.paused_at.slice(11, 16)} | ${billable} | ${desc}`;
+  }
+  return `${e.date} | ${formatHoursMinutes(e.duration_minutes)} | ${billable} | ${desc} | ${e.approval_status}`;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -87,8 +109,8 @@ export function registerTimeEntryTools(server: any, client: NexoraClient): void 
     {
       title: 'Timer Status',
       description:
-        'List all currently running timers for the authenticated user with elapsed time. ' +
-        'Returns an empty list when nothing is running.',
+        'List all currently active timers (running or paused, not yet finalized) for the ' +
+        'authenticated user. Returns an empty list when nothing is active.',
       inputSchema: {},
     },
     async () => {
@@ -100,15 +122,22 @@ export function registerTimeEntryTools(server: any, client: NexoraClient): void 
 
         const lines = [`# Active Timers (${entries.length})`];
         for (const entry of entries) {
+          // PM-418: compute elapsed based on activity state, not always
+          // now - started_at. Paused timers must NOT have a growing elapsed
+          // value — they show the snapshot at pause time
+          // (accumulated_minutes).
           let elapsed = 'unknown';
-          if (entry.started_at) {
+          if (entry.is_running && entry.started_at) {
             const startMs = new Date(entry.started_at).getTime();
             if (Number.isFinite(startMs)) {
-              const elapsedMs = Math.max(0, Date.now() - startMs);
-              const mins = Math.floor(elapsedMs / 60_000);
-              const hrs = Math.floor(mins / 60);
-              elapsed = hrs > 0 ? `${hrs}h ${mins % 60}m` : `${mins}m`;
+              const sinceStartMins = Math.floor((Date.now() - startMs) / 60_000);
+              const totalMins = (entry.accumulated_minutes ?? 0) + Math.max(0, sinceStartMins);
+              elapsed = `${formatHoursMinutes(totalMins)} (live)`;
             }
+          } else if (entry.paused_at && !entry.ended_at) {
+            elapsed = `${formatHoursMinutes(entry.accumulated_minutes ?? 0)} (paused)`;
+          } else if (entry.duration_minutes > 0) {
+            elapsed = formatHoursMinutes(entry.duration_minutes);
           }
           const scope = entry.work_item_id
             ? `work_item ${entry.work_item_id.slice(0, 8)}…`
