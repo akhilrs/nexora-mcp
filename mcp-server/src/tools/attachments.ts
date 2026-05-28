@@ -31,6 +31,69 @@ import type { Attachment } from '../types.js';
 import { formatAttachment, esc } from '../formatters.js';
 import { createHash } from 'node:crypto';
 import { errorResult, toolResult } from './helpers.js';
+import { basename, extname } from 'node:path';
+
+// PM-424: minimal MIME map by extension. The backend has its own
+// document_allowed_types_list; we just need to emit a plausible Content-Type
+// in the multipart part so the server can match. Anything not on this map
+// falls back to application/octet-stream and the backend's allowlist gates.
+const _MIME_BY_EXT: Record<string, string> = {
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.svg': 'image/svg+xml',
+  '.pdf': 'application/pdf',
+  '.txt': 'text/plain',
+  '.md': 'text/markdown',
+  '.csv': 'text/csv',
+  '.json': 'application/json',
+  '.zip': 'application/zip',
+  '.log': 'text/plain',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  '.mp4': 'video/mp4',
+  '.mov': 'video/quicktime',
+  '.wav': 'audio/wav',
+  '.mp3': 'audio/mpeg',
+};
+
+const MAX_UPLOAD_BYTES = 50 * 1024 * 1024; // backend's default platform.max_upload_size
+
+async function readLocalFileAsBlob(
+  path: string,
+  fileNameOverride?: string,
+): Promise<{ blob: Blob; name: string }> {
+  let stat;
+  try {
+    stat = await fsp.stat(path);
+  } catch (err) {
+    throw new Error(`File not found: ${path}`);
+  }
+  if (!stat.isFile()) {
+    throw new Error(`Path is not a regular file: ${path}`);
+  }
+  if (stat.size > MAX_UPLOAD_BYTES) {
+    throw new Error(
+      `File too large: ${stat.size} bytes (limit ${MAX_UPLOAD_BYTES} bytes). ` +
+        `Compress or split before uploading.`,
+    );
+  }
+  if (stat.size === 0) {
+    throw new Error(`File is empty: ${path}`);
+  }
+  const bytes = await fsp.readFile(path);
+  // Sanitize filename: defense-in-depth alongside backend _sanitize_filename.
+  // Strip CR/LF (multipart header injection guard) and path separators (the
+  // backend rejects them too, but failing fast here is cheaper than a 422).
+  const rawName = fileNameOverride ?? basename(path);
+  const name = rawName.replace(/[\r\n]+/g, ' ').replace(/[/\\]/g, '_').slice(0, 255);
+  const ext = extname(path).toLowerCase();
+  const mime = _MIME_BY_EXT[ext] ?? 'application/octet-stream';
+  return { blob: new Blob([new Uint8Array(bytes)], { type: mime }), name };
+}
 
 const MAX_BYTES = 10 * 1024 * 1024;               // 10 MiB hard cap (PM-326 spec)
 
@@ -222,6 +285,165 @@ export function registerAttachmentTools(server: any, client: NexoraClient): void
         header.push(`mode: tmpdir-path`);
         header.push(`path: ${esc(filePath)}`);
         return toolResult(header.join('\n'));
+      } catch (error) {
+        return errorResult(error);
+      }
+    },
+  );
+
+  // 3. UPLOAD ATTACHMENT (work item)
+  server.registerTool(
+    'nexora_attachment_upload',
+    {
+      title: 'Upload Attachment',
+      description:
+        'Upload a local file as a work-item attachment (PM-424). Reads the file at `path`, ' +
+        'sends multipart/form-data to `POST /projects/{p}/work-items/{wi}/attachments`. ' +
+        'MIME type is inferred from the file extension; backend rejects types outside ' +
+        'its document_allowed_types_list. Rejects files >50 MiB before upload.',
+      inputSchema: {
+        display_id: z.string().trim().min(1).describe('Work item display ID (e.g., PM-42)'),
+        path: z.string().trim().min(1).describe('Local filesystem path to the file to upload'),
+        file_name: z
+          .string()
+          .trim()
+          .min(1)
+          .optional()
+          .describe('Override the displayed filename (defaults to basename(path))'),
+      },
+    },
+    async ({ display_id, path, file_name }: { display_id: string; path: string; file_name?: string }) => {
+      try {
+        const { blob, name } = await readLocalFileAsBlob(path, file_name);
+        const projectId = await client.requireProjectId();
+        const itemUuid = await client.resolveDisplayId(display_id, projectId);
+
+        const fd = new FormData();
+        fd.set('file', blob, name);
+
+        const attachment = await client.uploadFile<Attachment>(
+          client.workItemsPath(projectId, itemUuid, 'attachments'),
+          fd,
+        );
+
+        return toolResult(
+          [
+            `Uploaded attachment to ${display_id}`,
+            formatAttachment(attachment),
+            `id: ${attachment.id}`,
+          ].join('\n'),
+        );
+      } catch (error) {
+        return errorResult(error);
+      }
+    },
+  );
+
+  // 4. UPLOAD COMMENT ATTACHMENT
+  server.registerTool(
+    'nexora_comment_attachment_upload',
+    {
+      title: 'Upload Comment Attachment',
+      description:
+        'Upload a local file as an attachment on a work-item comment (PM-424). ' +
+        'Provide either `comment_id` (attach to an existing comment) OR `create_comment` ' +
+        '(mint a fresh comment first, then attach). Exactly one of the two is required.',
+      inputSchema: {
+        display_id: z.string().trim().min(1).describe('Work item display ID (e.g., PM-42)'),
+        path: z.string().trim().min(1).describe('Local filesystem path to the file to upload'),
+        comment_id: z
+          .string()
+          .trim()
+          .uuid()
+          .optional()
+          .describe('Existing comment UUID to attach to. Mutually exclusive with create_comment.'),
+        create_comment: z
+          .string()
+          .trim()
+          .min(1)
+          .optional()
+          .describe('Body of a new comment to create + attach the file to. Mutually exclusive with comment_id.'),
+        file_name: z
+          .string()
+          .trim()
+          .min(1)
+          .optional()
+          .describe('Override the displayed filename (defaults to basename(path))'),
+      },
+    },
+    async ({
+      display_id,
+      path,
+      comment_id,
+      create_comment,
+      file_name,
+    }: {
+      display_id: string;
+      path: string;
+      comment_id?: string;
+      create_comment?: string;
+      file_name?: string;
+    }) => {
+      try {
+        if (!!comment_id === !!create_comment) {
+          return errorResult(
+            new Error('Provide exactly one of `comment_id` (existing comment) or `create_comment` (mint new).'),
+          );
+        }
+        const { blob, name } = await readLocalFileAsBlob(path, file_name);
+        const projectId = await client.requireProjectId();
+        const itemUuid = await client.resolveDisplayId(display_id, projectId);
+
+        let targetCommentId: string;
+        let preface = '';
+        let createdNewComment = false;
+        if (comment_id) {
+          targetCommentId = comment_id;
+        } else {
+          // Create the comment first, then upload to its endpoint.
+          const created = await client.post<{ id: string }>(
+            client.workItemsPath(projectId, itemUuid, 'comments'),
+            { content: create_comment },
+          );
+          targetCommentId = created.id;
+          createdNewComment = true;
+          preface = `Created comment ${targetCommentId}\n`;
+        }
+
+        const fd = new FormData();
+        fd.set('file', blob, name);
+
+        let attachment: Attachment;
+        try {
+          attachment = await client.uploadFile<Attachment>(
+            client.workItemsPath(projectId, itemUuid, 'comments', targetCommentId, 'attachments'),
+            fd,
+          );
+        } catch (uploadErr) {
+          // PM-424 / Codex review #3: best-effort rollback so a partial
+          // success doesn't leave an empty comment behind. If the rollback
+          // delete itself fails (network blip, race), the upload error is
+          // what the caller cares about — surface that.
+          if (createdNewComment) {
+            try {
+              await client.delete(
+                client.workItemsPath(projectId, itemUuid, 'comments', targetCommentId),
+              );
+            } catch {
+              /* swallow rollback failure; original upload error wins */
+            }
+          }
+          throw uploadErr;
+        }
+
+        return toolResult(
+          [
+            preface +
+              `Uploaded attachment to comment ${targetCommentId} on ${display_id}`,
+            formatAttachment(attachment),
+            `id: ${attachment.id}`,
+          ].join('\n'),
+        );
       } catch (error) {
         return errorResult(error);
       }

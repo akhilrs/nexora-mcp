@@ -120,6 +120,83 @@ export class NexoraClient {
     return this.request<T>('DELETE', path);
   }
 
+  /**
+   * PM-424: multipart/form-data upload. The shared `request()` always sets
+   * `Content-Type: application/json` and JSON-stringifies the body; for
+   * file uploads we need fetch to derive the boundary-bearing Content-Type
+   * from the FormData itself and stream the body as-is.
+   *
+   * Auth + retry semantics: same as request() except POST is NOT idempotent,
+   * so we don't retry on 5xx/429 here (an upload partial-success is worse
+   * than a clean error the caller can act on). Timeout via AbortController.
+   */
+  async uploadFile<T = unknown>(path: string, formData: FormData): Promise<T> {
+    const url = `${this.baseUrl}${path.startsWith('/') ? path : `/${path}`}`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          'X-Organization-ID': this.organizationId,
+          // Deliberately NO Content-Type — fetch + FormData set the right
+          // multipart/form-data; boundary=... header automatically.
+          Accept: 'application/json',
+        },
+        body: formData,
+        signal: controller.signal,
+      });
+
+      if (response.status === 204) {
+        return undefined as T;
+      }
+
+      const contentType = response.headers.get('content-type') ?? '';
+      if (!contentType.includes('application/json')) {
+        const text = await response.text().catch(() => '');
+        // Upload callers always parse JSON off the response (Attachment.id etc.).
+        // A 2xx with non-JSON body is server misconfiguration; surface it as
+        // an error so callers don't try to deref a string. Codex review #1.
+        throw new NexoraApiError(
+          `HTTP ${response.status}: ${text.slice(0, 200) || 'non-JSON response on upload'}`,
+          response.status,
+        );
+      }
+
+      let data: unknown;
+      try {
+        data = await response.json();
+      } catch {
+        throw new NexoraApiError(
+          `HTTP ${response.status}: invalid JSON in response`,
+          response.status,
+        );
+      }
+
+      if (!response.ok) {
+        const apiError = data as ApiErrorBody;
+        const message = apiError?.error?.message ?? `HTTP ${response.status}`;
+        const code = apiError?.error?.code;
+        const details = apiError?.error?.details;
+        throw this.mapHttpError(response.status, message, code, details);
+      }
+
+      return data as T;
+    } catch (error) {
+      if (error instanceof NexoraApiError) throw error;
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        throw new NetworkError(`Upload timed out after ${this.timeoutMs}ms`);
+      }
+      if (error instanceof TypeError) {
+        throw new NetworkError(`Network error: ${error.message}`, error);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async resolveDisplayId(displayId: string, projectId: string): Promise<string> {
     const cacheKey = `${projectId}:${displayId}`;
     const cached = this.displayIdCache.get(cacheKey);
