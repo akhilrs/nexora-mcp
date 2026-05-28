@@ -141,3 +141,22 @@ export interface ActivityLogEntry {
   summary: string;
   created_at: string;
 }
+
+// PM-327: attachment metadata as returned by
+// GET /projects/{p}/work-items/{wi}/attachments. Parent linkage is via the
+// first non-null of comment_id > message_id > work_item_id > project_id
+// (strict precedence — see deriveAttachmentParent helper).
+export interface Attachment {
+  id: string;
+  organization_id: string;
+  work_item_id: string | null;
+  message_id: string | null;
+  comment_id: string | null;
+  project_id: string | null;
+  file_key: string;
+  file_name: string;
+  file_size_bytes: number;
+  mime_type: string;
+  uploaded_by_id: string;
+  created_at: string;
+}

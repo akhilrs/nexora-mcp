@@ -21245,6 +21245,158 @@ var NexoraClient = class {
         return new NexoraApiError(message, status, code, details);
     }
   }
+  // PM-327: getBytes — raw binary download with redirect inspection + byte cap.
+  // Used by nexora_attachment_download to follow Nexora's 302 to a signed
+  // storage URL (s3.qs0.dev by default), validate the redirect target, then
+  // stream bytes with a hard byte budget. Server-side SSRF defense:
+  // - HTTPS-only on every hop
+  // - Host allowlist (canonicalized: lowercase + strip trailing dot)
+  // - Rejects IPv4/IPv6 literals + userinfo in redirect Location
+  // - Accept-Encoding: identity to prevent gzip-bomb amplification
+  // - Streaming byte cap (does NOT trust Content-Length as ground truth)
+  // - connect + body timeouts via AbortController
+  async getBytes(path, opts) {
+    const crypto = await import("node:crypto");
+    const connectTimeout = opts.connectTimeoutMs ?? 1e4;
+    const bodyTimeout = opts.bodyTimeoutMs ?? 6e4;
+    const maxHops = opts.maxRedirectHops ?? 2;
+    const allowedHosts = opts.allowedRedirectHosts.map((h) => h.trim().toLowerCase().replace(/\.+$/, "")).filter(Boolean);
+    let currentUrl = `${this.baseUrl}${path.startsWith("/") ? path : `/${path}`}`;
+    let useAuth = true;
+    let hops = 0;
+    while (true) {
+      const controller = new AbortController();
+      const connectTimer = setTimeout(() => controller.abort(), connectTimeout);
+      const headers = {
+        "Accept-Encoding": "identity"
+      };
+      if (useAuth) {
+        headers["Authorization"] = `Bearer ${this.apiKey}`;
+        headers["X-Organization-ID"] = this.organizationId;
+      }
+      let response;
+      try {
+        response = await fetch(currentUrl, {
+          method: "GET",
+          headers,
+          redirect: "manual",
+          signal: controller.signal
+        });
+      } catch (err) {
+        clearTimeout(connectTimer);
+        if (err instanceof DOMException && err.name === "AbortError") {
+          throw new NetworkError(`getBytes connect timed out after ${connectTimeout}ms`);
+        }
+        if (err instanceof TypeError) {
+          throw new NetworkError(`getBytes network error: ${err.message}`, err);
+        }
+        throw err;
+      }
+      clearTimeout(connectTimer);
+      if ([301, 302, 303, 307, 308].includes(response.status)) {
+        hops++;
+        if (hops > maxHops) {
+          throw new NetworkError(`getBytes exceeded ${maxHops} redirect hops`);
+        }
+        const location = response.headers.get("location");
+        if (!location || location.trim().length === 0) {
+          throw new NetworkError(`${response.status} redirect missing Location header`);
+        }
+        let nextUrl;
+        try {
+          nextUrl = new URL(location, currentUrl);
+        } catch {
+          throw new NetworkError(`invalid redirect URL: ${location.slice(0, 120)}`);
+        }
+        if (nextUrl.protocol !== "https:") {
+          throw new NetworkError(`redirect to non-https scheme: ${nextUrl.protocol}`);
+        }
+        if (nextUrl.username || nextUrl.password) {
+          throw new NetworkError(`redirect contains userinfo \u2014 refused`);
+        }
+        let host = nextUrl.hostname.toLowerCase();
+        if (host.endsWith(".")) host = host.replace(/\.+$/, "");
+        if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) {
+          throw new NetworkError(`redirect to IPv4 literal refused: ${host}`);
+        }
+        if (host.startsWith("[") || host.includes(":")) {
+          throw new NetworkError(`redirect to IPv6 literal refused: ${host}`);
+        }
+        if (nextUrl.port !== "" && nextUrl.port !== "443") {
+          throw new NetworkError(`redirect to non-default port refused: ${nextUrl.port}`);
+        }
+        if (!allowedHosts.includes(host)) {
+          throw new NetworkError(
+            `redirect to disallowed host: ${host} (allowed: ${allowedHosts.join(", ")})`
+          );
+        }
+        currentUrl = nextUrl.href;
+        useAuth = false;
+        try {
+          await response.body?.cancel();
+        } catch {
+        }
+        continue;
+      }
+      if (!response.ok) {
+        try {
+          await response.body?.cancel();
+        } catch {
+        }
+        throw new NetworkError(`getBytes failed: ${response.status} ${response.statusText}`);
+      }
+      const declared = response.headers.get("content-length");
+      if (declared) {
+        const declaredN = parseInt(declared, 10);
+        if (!isNaN(declaredN) && declaredN > opts.maxBytes) {
+          throw new NetworkError(
+            `Content-Length ${declaredN} exceeds byte budget ${opts.maxBytes}`
+          );
+        }
+      }
+      const mimeType = (response.headers.get("content-type") ?? "application/octet-stream").split(";")[0].trim();
+      if (!response.body) {
+        throw new NetworkError("getBytes: no response body");
+      }
+      const hash = crypto.createHash("sha256");
+      const reader = response.body.getReader();
+      const chunks = [];
+      let total = 0;
+      const bodyTimer = setTimeout(() => controller.abort(), bodyTimeout);
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          total += value.byteLength;
+          if (total > opts.maxBytes) {
+            try {
+              await reader.cancel();
+            } catch {
+            }
+            throw new NetworkError(
+              `streamed bytes exceeded budget during download (cap ${opts.maxBytes})`
+            );
+          }
+          const buf = Buffer.from(value);
+          hash.update(buf);
+          chunks.push(buf);
+        }
+      } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") {
+          throw new NetworkError(`getBytes body read timed out after ${bodyTimeout}ms`);
+        }
+        throw err;
+      } finally {
+        clearTimeout(bodyTimer);
+      }
+      return {
+        bytes: Buffer.concat(chunks, total),
+        mimeType,
+        sha256: hash.digest("hex"),
+        hops
+      };
+    }
+  }
 };
 function sleep(ms) {
   return new Promise((resolve2) => setTimeout(resolve2, ms));
@@ -22210,6 +22362,240 @@ ${formatActivity(activity)}`);
   );
 }
 
+// src/tools/attachments.ts
+import { promises as fsp } from "node:fs";
+import { tmpdir } from "node:os";
+import { join as pathJoin } from "node:path";
+
+// src/formatters.ts
+var PRIORITY_LABELS = {
+  0: "critical",
+  1: "high",
+  2: "medium",
+  3: "low",
+  4: "none"
+};
+function esc2(value) {
+  if (!value) return "";
+  return value.replace(/\r/g, "\\r").replace(/\n/g, "\\n").replace(/\x00/g, "\\0").replace(/\x1b/g, "\\x1b").replace(/[\u2028\u2029]/g, "\\u2028").replace(/:/g, "\\:");
+}
+function formatDate(iso) {
+  if (!iso) return "";
+  return iso.slice(0, 10);
+}
+function formatWorkItem(item) {
+  const lines = [
+    `# ${item.display_id} \u2014 ${esc2(item.title)}`,
+    `type: ${item.item_type}`,
+    `status: ${item.status}`,
+    `priority: ${PRIORITY_LABELS[item.priority] ?? item.priority} (${item.priority})`
+  ];
+  if (item.assigned_to_id) lines.push(`assigned_to: ${item.assigned_to_id}`);
+  if (item.due_date) lines.push(`due_date: ${formatDate(item.due_date)}`);
+  if (item.estimated_hours != null) lines.push(`estimated_hours: ${item.estimated_hours}`);
+  if (item.parent_id) lines.push(`parent_id: ${item.parent_id}`);
+  if (item.stream_id) lines.push(`stream_id: ${item.stream_id}`);
+  if (item.tags?.length) lines.push(`tags: ${item.tags.join(", ")}`);
+  if (item.description) {
+    lines.push(`description: ${esc2(item.description)}`);
+  }
+  if (item.acceptance_criteria?.length) {
+    lines.push(`acceptance_criteria:`);
+    for (const ac of item.acceptance_criteria) {
+      lines.push(`  - [${ac.testable ? "testable" : "non-testable"}] ${ac.criterion}`);
+    }
+  }
+  if (item.completed_at) lines.push(`completed_at: ${formatDate(item.completed_at)}`);
+  lines.push(`created: ${formatDate(item.created_at)}`);
+  lines.push(`id: ${item.id}`);
+  return lines.join("\n");
+}
+function formatWorkItemList(items, total) {
+  if (items.length === 0) return "No work items found.";
+  const header = total != null ? `# Work Items (${items.length} of ${total})` : `# Work Items (${items.length})`;
+  const rows = items.map((item) => {
+    const priority = PRIORITY_LABELS[item.priority] ?? String(item.priority);
+    const due = item.due_date ? formatDate(item.due_date) : "";
+    return `${item.display_id} | ${item.status.padEnd(11)} | ${priority.padEnd(8)} | ${item.item_type.padEnd(7)} | ${esc2(item.title).slice(0, 60)}${due ? ` (due ${due})` : ""}`;
+  });
+  return [header, ...rows].join("\n");
+}
+function formatWorkItemCompact(item) {
+  const priority = PRIORITY_LABELS[item.priority] ?? String(item.priority);
+  return `${item.display_id} [${item.status}] ${priority} ${item.item_type}: ${esc2(item.title)}`;
+}
+function deriveAttachmentParent(a) {
+  if (a.comment_id) return { type: "comment", id: a.comment_id };
+  if (a.message_id) return { type: "message", id: a.message_id };
+  if (a.work_item_id) return { type: "work_item", id: a.work_item_id };
+  if (a.project_id) return { type: "project", id: a.project_id };
+  return { type: "unknown", id: "" };
+}
+function formatAttachment(a) {
+  const parent = deriveAttachmentParent(a);
+  const created = a.created_at?.slice(0, 16).replace("T", " ") ?? "";
+  return [
+    `- ${esc2(a.file_name)} (${esc2(a.mime_type)}, ${a.file_size_bytes}B)`,
+    `  id: ${esc2(a.id)}`,
+    `  parent: ${esc2(parent.type)}${parent.id ? ` (${esc2(parent.id)})` : ""}`,
+    `  uploaded_by: ${esc2(a.uploaded_by_id)}`,
+    `  created: ${esc2(created)}`
+  ].join("\n");
+}
+
+// src/tools/attachments.ts
+import { createHash } from "node:crypto";
+var INLINE_THRESHOLD_BYTES = 2 * 1024 * 1024;
+var MAX_BYTES = 10 * 1024 * 1024;
+var MIME_TO_EXT = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/gif": "gif",
+  "image/webp": "webp",
+  "image/svg+xml": "svg",
+  "application/pdf": "pdf",
+  "text/plain": "txt",
+  "text/markdown": "md",
+  "application/json": "json"
+};
+function extensionFor(mimeType) {
+  return MIME_TO_EXT[mimeType.toLowerCase()] ?? "bin";
+}
+var DEFAULT_ALLOWED_HOSTS = ["s3.qs0.dev"];
+function allowedRedirectHosts() {
+  const env = process.env.NEXORA_ATTACHMENT_HOSTS;
+  if (env && env.trim()) {
+    const parsed = env.split(",").map((h) => h.trim().toLowerCase().replace(/\.+$/, "")).filter(Boolean);
+    if (parsed.length > 0) return parsed;
+  }
+  return DEFAULT_ALLOWED_HOSTS;
+}
+async function writeAttachmentAtomically(bytes, sha256, mimeType) {
+  const dir = pathJoin(tmpdir(), "nexora-mcp-attachments");
+  await fsp.mkdir(dir, { recursive: true, mode: 448 });
+  const lstat = await fsp.lstat(dir);
+  if (!lstat.isDirectory() || lstat.isSymbolicLink()) {
+    throw new Error(`nexora-mcp-attachments path is not a regular directory: ${dir}`);
+  }
+  try {
+    await fsp.chmod(dir, 448);
+  } catch {
+  }
+  const ext = extensionFor(mimeType);
+  const finalPath = pathJoin(dir, `${sha256}.${ext}`);
+  try {
+    await fsp.access(finalPath);
+    const existing = await fsp.readFile(finalPath);
+    const onDiskSha = createHash("sha256").update(existing).digest("hex");
+    if (onDiskSha === sha256) return finalPath;
+  } catch {
+  }
+  const tmpPath = `${finalPath}.tmp.${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
+  await fsp.writeFile(tmpPath, bytes, { flag: "wx", mode: 384 });
+  try {
+    await fsp.rename(tmpPath, finalPath);
+  } catch (err) {
+    try {
+      await fsp.unlink(tmpPath);
+    } catch {
+    }
+    try {
+      const existing = await fsp.readFile(finalPath);
+      const onDiskSha = createHash("sha256").update(existing).digest("hex");
+      if (onDiskSha === sha256) return finalPath;
+    } catch {
+    }
+    throw err;
+  }
+  return finalPath;
+}
+function registerAttachmentTools(server, client) {
+  server.registerTool(
+    "nexora_attachment_list",
+    {
+      title: "List Attachments",
+      description: "List file attachments on a work item (covers direct-on-task uploads AND attachments uploaded inside comments \u2014 the derived `parent` field distinguishes them). Use this in Phase 0 step 3d (PM-326) to inventory attachments before deciding whether to download bytes.",
+      inputSchema: {
+        display_id: external_exports.string().trim().min(1).describe("Work item display ID (e.g., PM-42)")
+      }
+    },
+    async ({ display_id }) => {
+      try {
+        const projectId = await client.requireProjectId();
+        const itemUuid = await client.resolveDisplayId(display_id, projectId);
+        const attachments = await client.get(
+          client.workItemsPath(projectId, itemUuid, "attachments")
+        );
+        if (attachments.length === 0) {
+          return toolResult(`No attachments on ${display_id}.`);
+        }
+        const lines = [`# Attachments on ${display_id} (${attachments.length})`, ""];
+        for (const a of attachments) {
+          lines.push(formatAttachment(a));
+          lines.push("");
+        }
+        return toolResult(lines.join("\n").trimEnd());
+      } catch (error2) {
+        return errorResult(error2);
+      }
+    }
+  );
+  server.registerTool(
+    "nexora_attachment_download",
+    {
+      title: "Download Attachment",
+      description: "Download an attachment with server-side SSRF + byte-budget enforcement. Returns hybrid output: inline base64 (single-line) for files <2 MiB; a tmpdir path (${TMPDIR}/nexora-mcp-attachments/<sha256>.<ext>) for files 2 MiB\u201310 MiB. Rejects files >10 MiB. Follows Nexora's signed-URL redirect (302 \u2192 s3.qs0.dev by default; configurable via NEXORA_ATTACHMENT_HOSTS env var).",
+      inputSchema: {
+        display_id: external_exports.string().trim().min(1).describe("Work item display ID (parent context for the URL)"),
+        attachment_id: external_exports.string().trim().uuid().describe("Attachment UUID (from nexora_attachment_list)")
+      }
+    },
+    async ({ display_id, attachment_id }) => {
+      try {
+        const projectId = await client.requireProjectId();
+        const itemUuid = await client.resolveDisplayId(display_id, projectId);
+        const downloadPath = client.workItemsPath(
+          projectId,
+          itemUuid,
+          "attachments",
+          attachment_id,
+          "download"
+        );
+        const result = await client.getBytes(downloadPath, {
+          maxBytes: MAX_BYTES,
+          allowedRedirectHosts: allowedRedirectHosts()
+        });
+        const size = result.bytes.length;
+        const header = [
+          `# Downloaded attachment`,
+          `mime_type: ${esc2(result.mimeType)}`,
+          `size_bytes: ${size}`,
+          `sha256: ${esc2(result.sha256)}`,
+          `redirect_hops: ${result.hops}`
+        ];
+        if (size < INLINE_THRESHOLD_BYTES) {
+          const b64 = result.bytes.toString("base64");
+          header.push(`mode: inline-base64`);
+          header.push(``);
+          header.push(`base64:`);
+          header.push(b64);
+          return toolResult(header.join("\n"));
+        }
+        const filePath = await writeAttachmentAtomically(
+          result.bytes,
+          result.sha256,
+          result.mimeType
+        );
+        header.push(`mode: tmpdir-path`);
+        header.push(`path: ${esc2(filePath)}`);
+        return toolResult(header.join("\n"));
+      } catch (error2) {
+        return errorResult(error2);
+      }
+    }
+  );
+}
+
 // src/tools/comments.ts
 function formatComment(c) {
   const date3 = c.created_at?.slice(0, 16).replace("T", " ") ?? "";
@@ -22925,64 +23311,6 @@ position: ${stream.position}`);
   );
 }
 
-// src/formatters.ts
-var PRIORITY_LABELS = {
-  0: "critical",
-  1: "high",
-  2: "medium",
-  3: "low",
-  4: "none"
-};
-function esc2(value) {
-  if (!value) return "";
-  return value.replace(/\n/g, "\\n").replace(/:/g, "\\:");
-}
-function formatDate(iso) {
-  if (!iso) return "";
-  return iso.slice(0, 10);
-}
-function formatWorkItem(item) {
-  const lines = [
-    `# ${item.display_id} \u2014 ${esc2(item.title)}`,
-    `type: ${item.item_type}`,
-    `status: ${item.status}`,
-    `priority: ${PRIORITY_LABELS[item.priority] ?? item.priority} (${item.priority})`
-  ];
-  if (item.assigned_to_id) lines.push(`assigned_to: ${item.assigned_to_id}`);
-  if (item.due_date) lines.push(`due_date: ${formatDate(item.due_date)}`);
-  if (item.estimated_hours != null) lines.push(`estimated_hours: ${item.estimated_hours}`);
-  if (item.parent_id) lines.push(`parent_id: ${item.parent_id}`);
-  if (item.stream_id) lines.push(`stream_id: ${item.stream_id}`);
-  if (item.tags?.length) lines.push(`tags: ${item.tags.join(", ")}`);
-  if (item.description) {
-    lines.push(`description: ${esc2(item.description)}`);
-  }
-  if (item.acceptance_criteria?.length) {
-    lines.push(`acceptance_criteria:`);
-    for (const ac of item.acceptance_criteria) {
-      lines.push(`  - [${ac.testable ? "testable" : "non-testable"}] ${ac.criterion}`);
-    }
-  }
-  if (item.completed_at) lines.push(`completed_at: ${formatDate(item.completed_at)}`);
-  lines.push(`created: ${formatDate(item.created_at)}`);
-  lines.push(`id: ${item.id}`);
-  return lines.join("\n");
-}
-function formatWorkItemList(items, total) {
-  if (items.length === 0) return "No work items found.";
-  const header = total != null ? `# Work Items (${items.length} of ${total})` : `# Work Items (${items.length})`;
-  const rows = items.map((item) => {
-    const priority = PRIORITY_LABELS[item.priority] ?? String(item.priority);
-    const due = item.due_date ? formatDate(item.due_date) : "";
-    return `${item.display_id} | ${item.status.padEnd(11)} | ${priority.padEnd(8)} | ${item.item_type.padEnd(7)} | ${esc2(item.title).slice(0, 60)}${due ? ` (due ${due})` : ""}`;
-  });
-  return [header, ...rows].join("\n");
-}
-function formatWorkItemCompact(item) {
-  const priority = PRIORITY_LABELS[item.priority] ?? String(item.priority);
-  return `${item.display_id} [${item.status}] ${priority} ${item.item_type}: ${esc2(item.title)}`;
-}
-
 // src/tools/search-activity.ts
 function registerSearchActivityTools(server, client) {
   server.registerTool(
@@ -23575,7 +23903,7 @@ ${formatWorkItemCompact(item)}${suffix}`);
 }
 
 // src/index.ts
-var VERSION = "0.9.0";
+var VERSION = "0.10.0";
 function createLazyClient() {
   let _client = null;
   return new Proxy({}, {
@@ -23595,6 +23923,7 @@ function createServer() {
     version: VERSION
   });
   registerWorkItemTools(server, client);
+  registerAttachmentTools(server, client);
   registerDependencyTools(server, client);
   registerCommentTools(server, client);
   registerMessageTools(server, client);

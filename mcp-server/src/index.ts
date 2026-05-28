@@ -6,6 +6,7 @@ import { NexoraClient } from './client.js';
 import { getConfig } from './config.js';
 import { NexoraApiError, NetworkError } from './errors.js';
 import { registerActivityTools } from './tools/activities.js';
+import { registerAttachmentTools } from './tools/attachments.js';
 import { registerCommentTools } from './tools/comments.js';
 import { registerDependencyTools } from './tools/dependencies.js';
 import { registerMessageTools } from './tools/messages.js';
@@ -14,7 +15,7 @@ import { registerSearchActivityTools } from './tools/search-activity.js';
 import { registerTimeEntryTools } from './tools/time-entries.js';
 import { registerWorkItemTools } from './tools/work-items.js';
 
-const VERSION = '0.9.0';
+const VERSION = '0.10.0';
 
 /**
  * Lazy client proxy — config is resolved on first tool call, not at startup.
@@ -44,6 +45,7 @@ function createServer(): McpServer {
 
   // Work item CRUD tools
   registerWorkItemTools(server, client);
+  registerAttachmentTools(server, client);
   registerDependencyTools(server, client);
   registerCommentTools(server, client);
   registerMessageTools(server, client);
