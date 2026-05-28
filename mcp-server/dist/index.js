@@ -21146,6 +21146,74 @@ var NexoraClient = class {
   async delete(path) {
     return this.request("DELETE", path);
   }
+  /**
+   * PM-424: multipart/form-data upload. The shared `request()` always sets
+   * `Content-Type: application/json` and JSON-stringifies the body; for
+   * file uploads we need fetch to derive the boundary-bearing Content-Type
+   * from the FormData itself and stream the body as-is.
+   *
+   * Auth + retry semantics: same as request() except POST is NOT idempotent,
+   * so we don't retry on 5xx/429 here (an upload partial-success is worse
+   * than a clean error the caller can act on). Timeout via AbortController.
+   */
+  async uploadFile(path, formData) {
+    const url = `${this.baseUrl}${path.startsWith("/") ? path : `/${path}`}`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          "X-Organization-ID": this.organizationId,
+          // Deliberately NO Content-Type — fetch + FormData set the right
+          // multipart/form-data; boundary=... header automatically.
+          Accept: "application/json"
+        },
+        body: formData,
+        signal: controller.signal
+      });
+      if (response.status === 204) {
+        return void 0;
+      }
+      const contentType = response.headers.get("content-type") ?? "";
+      if (!contentType.includes("application/json")) {
+        const text = await response.text().catch(() => "");
+        throw new NexoraApiError(
+          `HTTP ${response.status}: ${text.slice(0, 200) || "non-JSON response on upload"}`,
+          response.status
+        );
+      }
+      let data;
+      try {
+        data = await response.json();
+      } catch {
+        throw new NexoraApiError(
+          `HTTP ${response.status}: invalid JSON in response`,
+          response.status
+        );
+      }
+      if (!response.ok) {
+        const apiError = data;
+        const message = apiError?.error?.message ?? `HTTP ${response.status}`;
+        const code = apiError?.error?.code;
+        const details = apiError?.error?.details;
+        throw this.mapHttpError(response.status, message, code, details);
+      }
+      return data;
+    } catch (error2) {
+      if (error2 instanceof NexoraApiError) throw error2;
+      if (error2 instanceof DOMException && error2.name === "AbortError") {
+        throw new NetworkError(`Upload timed out after ${this.timeoutMs}ms`);
+      }
+      if (error2 instanceof TypeError) {
+        throw new NetworkError(`Network error: ${error2.message}`, error2);
+      }
+      throw error2;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
   async resolveDisplayId(displayId, projectId) {
     const cacheKey = `${projectId}:${displayId}`;
     const cached2 = this.displayIdCache.get(cacheKey);
@@ -22445,6 +22513,55 @@ function formatAttachment(a) {
 
 // src/tools/attachments.ts
 import { createHash } from "node:crypto";
+import { basename, extname } from "node:path";
+var _MIME_BY_EXT = {
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+  ".svg": "image/svg+xml",
+  ".pdf": "application/pdf",
+  ".txt": "text/plain",
+  ".md": "text/markdown",
+  ".csv": "text/csv",
+  ".json": "application/json",
+  ".zip": "application/zip",
+  ".log": "text/plain",
+  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  ".mp4": "video/mp4",
+  ".mov": "video/quicktime",
+  ".wav": "audio/wav",
+  ".mp3": "audio/mpeg"
+};
+var MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+async function readLocalFileAsBlob(path, fileNameOverride) {
+  let stat;
+  try {
+    stat = await fsp.stat(path);
+  } catch (err) {
+    throw new Error(`File not found: ${path}`);
+  }
+  if (!stat.isFile()) {
+    throw new Error(`Path is not a regular file: ${path}`);
+  }
+  if (stat.size > MAX_UPLOAD_BYTES) {
+    throw new Error(
+      `File too large: ${stat.size} bytes (limit ${MAX_UPLOAD_BYTES} bytes). Compress or split before uploading.`
+    );
+  }
+  if (stat.size === 0) {
+    throw new Error(`File is empty: ${path}`);
+  }
+  const bytes = await fsp.readFile(path);
+  const rawName = fileNameOverride ?? basename(path);
+  const name = rawName.replace(/[\r\n]+/g, " ").replace(/[/\\]/g, "_").slice(0, 255);
+  const ext = extname(path).toLowerCase();
+  const mime = _MIME_BY_EXT[ext] ?? "application/octet-stream";
+  return { blob: new Blob([new Uint8Array(bytes)], { type: mime }), name };
+}
 var MAX_BYTES = 10 * 1024 * 1024;
 var MIME_TO_EXT = {
   "image/png": "png",
@@ -22580,6 +22697,115 @@ function registerAttachmentTools(server, client) {
         header.push(`mode: tmpdir-path`);
         header.push(`path: ${esc2(filePath)}`);
         return toolResult(header.join("\n"));
+      } catch (error2) {
+        return errorResult(error2);
+      }
+    }
+  );
+  server.registerTool(
+    "nexora_attachment_upload",
+    {
+      title: "Upload Attachment",
+      description: "Upload a local file as a work-item attachment (PM-424). Reads the file at `path`, sends multipart/form-data to `POST /projects/{p}/work-items/{wi}/attachments`. MIME type is inferred from the file extension; backend rejects types outside its document_allowed_types_list. Rejects files >50 MiB before upload.",
+      inputSchema: {
+        display_id: external_exports.string().trim().min(1).describe("Work item display ID (e.g., PM-42)"),
+        path: external_exports.string().trim().min(1).describe("Local filesystem path to the file to upload"),
+        file_name: external_exports.string().trim().min(1).optional().describe("Override the displayed filename (defaults to basename(path))")
+      }
+    },
+    async ({ display_id, path, file_name }) => {
+      try {
+        const { blob, name } = await readLocalFileAsBlob(path, file_name);
+        const projectId = await client.requireProjectId();
+        const itemUuid = await client.resolveDisplayId(display_id, projectId);
+        const fd = new FormData();
+        fd.set("file", blob, name);
+        const attachment = await client.uploadFile(
+          client.workItemsPath(projectId, itemUuid, "attachments"),
+          fd
+        );
+        return toolResult(
+          [
+            `Uploaded attachment to ${display_id}`,
+            formatAttachment(attachment),
+            `id: ${attachment.id}`
+          ].join("\n")
+        );
+      } catch (error2) {
+        return errorResult(error2);
+      }
+    }
+  );
+  server.registerTool(
+    "nexora_comment_attachment_upload",
+    {
+      title: "Upload Comment Attachment",
+      description: "Upload a local file as an attachment on a work-item comment (PM-424). Provide either `comment_id` (attach to an existing comment) OR `create_comment` (mint a fresh comment first, then attach). Exactly one of the two is required.",
+      inputSchema: {
+        display_id: external_exports.string().trim().min(1).describe("Work item display ID (e.g., PM-42)"),
+        path: external_exports.string().trim().min(1).describe("Local filesystem path to the file to upload"),
+        comment_id: external_exports.string().trim().uuid().optional().describe("Existing comment UUID to attach to. Mutually exclusive with create_comment."),
+        create_comment: external_exports.string().trim().min(1).optional().describe("Body of a new comment to create + attach the file to. Mutually exclusive with comment_id."),
+        file_name: external_exports.string().trim().min(1).optional().describe("Override the displayed filename (defaults to basename(path))")
+      }
+    },
+    async ({
+      display_id,
+      path,
+      comment_id,
+      create_comment,
+      file_name
+    }) => {
+      try {
+        if (!!comment_id === !!create_comment) {
+          return errorResult(
+            new Error("Provide exactly one of `comment_id` (existing comment) or `create_comment` (mint new).")
+          );
+        }
+        const { blob, name } = await readLocalFileAsBlob(path, file_name);
+        const projectId = await client.requireProjectId();
+        const itemUuid = await client.resolveDisplayId(display_id, projectId);
+        let targetCommentId;
+        let preface = "";
+        let createdNewComment = false;
+        if (comment_id) {
+          targetCommentId = comment_id;
+        } else {
+          const created = await client.post(
+            client.workItemsPath(projectId, itemUuid, "comments"),
+            { content: create_comment }
+          );
+          targetCommentId = created.id;
+          createdNewComment = true;
+          preface = `Created comment ${targetCommentId}
+`;
+        }
+        const fd = new FormData();
+        fd.set("file", blob, name);
+        let attachment;
+        try {
+          attachment = await client.uploadFile(
+            client.workItemsPath(projectId, itemUuid, "comments", targetCommentId, "attachments"),
+            fd
+          );
+        } catch (uploadErr) {
+          if (createdNewComment) {
+            try {
+              await client.delete(
+                client.workItemsPath(projectId, itemUuid, "comments", targetCommentId)
+              );
+            } catch {
+            }
+          }
+          throw uploadErr;
+        }
+        return toolResult(
+          [
+            preface + `Uploaded attachment to comment ${targetCommentId} on ${display_id}`,
+            formatAttachment(attachment),
+            `id: ${attachment.id}`
+          ].join("\n")
+        );
       } catch (error2) {
         return errorResult(error2);
       }
