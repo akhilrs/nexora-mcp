@@ -15,6 +15,7 @@ export function esc(value: string | null | undefined): string {
   // plus ':' (used as key/value delimiter in our tool output). Defense against terminal /
   // log / agent-parser injection via untrusted filenames + mime types.
   return value
+    .replace(/\\/g, '\\\\')
     .replace(/\r/g, '\\r')
     .replace(/\n/g, '\\n')
     .replace(/\x00/g, '\\0')
