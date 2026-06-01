@@ -28,8 +28,8 @@
         "matcher": "*",
         "hooks": [
           {
-            "type": "prompt",
-            "prompt": "Subagent session ending. If you were working on a Nexora work item, add a checkpoint comment with nexora_comment_add summarizing what was accomplished in this subagent session.",
+            "type": "command",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/subagent-stop-checkpoint.mjs",
             "timeout": 10
           }
         ]
