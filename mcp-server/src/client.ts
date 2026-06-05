@@ -1,4 +1,5 @@
 import type { NexoraConfig } from './config.js';
+import type { CurrentUser } from './types.js';
 import {
   AuthenticationError,
   ForbiddenError,
@@ -32,7 +33,7 @@ export class NexoraClient {
   private projectCode: string | undefined;
 
   private readonly displayIdCache = new Map<string, string>();
-  private currentUserIdCache: string | undefined;
+  private currentUserCache: CurrentUser | undefined;
 
   constructor(config: NexoraConfig) {
     this.baseUrl = config.apiUrl;
@@ -81,16 +82,27 @@ export class NexoraClient {
     return match.id;
   }
 
-  async resolveCurrentUserId(): Promise<string | undefined> {
-    if (this.currentUserIdCache) return this.currentUserIdCache;
+  async getMe(): Promise<CurrentUser> {
+    if (this.currentUserCache) return this.currentUserCache;
 
+    const me = await this.get<CurrentUser>('/auth/me');
+    if (!me?.id || typeof me.email !== 'string' || typeof me.full_name !== 'string') {
+      throw new NexoraApiError(
+        '/auth/me returned an unexpected shape (id/email/full_name required)',
+        502,
+        'BAD_ME_RESPONSE',
+      );
+    }
+    // Cache only a verified-successful response — a cached transient failure
+    // would disable auto-assignment for the lifetime of the process.
+    this.currentUserCache = me;
+    return me;
+  }
+
+  async resolveCurrentUserId(): Promise<string | undefined> {
     try {
-      const me = await this.get<{ id: string; employee_id?: string }>('/me');
-      const userId = me.employee_id ?? me.id;
-      if (userId) {
-        this.currentUserIdCache = userId;
-      }
-      return this.currentUserIdCache;
+      const me = await this.getMe();
+      return me.id;
     } catch {
       return undefined;
     }

@@ -15,7 +15,7 @@ import { registerSearchActivityTools } from './tools/search-activity.js';
 import { registerTimeEntryTools } from './tools/time-entries.js';
 import { registerWorkItemTools } from './tools/work-items.js';
 
-const VERSION = '0.10.1';
+const VERSION = '0.11.1';
 
 /**
  * Lazy client proxy — config is resolved on first tool call, not at startup.
@@ -60,12 +60,23 @@ function createServer(): McpServer {
     {
       title: 'Nexora Context',
       description:
-        'Show current Nexora MCP configuration: connected project, organization, API status. ' +
+        'Show current Nexora MCP configuration: connected project, organization, current user ' +
+        '(name, email, user UUID — usable as assigned_to_id), API status. ' +
         'Use this to verify the connection is working.',
       inputSchema: {},
     },
     async () => {
       try {
+        let userInfo = 'unavailable';
+        let meOk = false;
+        try {
+          const me = await client.getMe();
+          userInfo = `${me.full_name} <${me.email}>\nuser_id: ${me.id}`;
+          meOk = true;
+        } catch (error) {
+          userInfo = `unavailable — ${error instanceof Error ? error.message : String(error)}`;
+        }
+
         const projectCode = client.currentProjectCode;
         let projectInfo = 'No default project configured';
 
@@ -96,8 +107,10 @@ function createServer(): McpServer {
                 '# Nexora MCP Context',
                 `api: ${getConfig().apiUrl}`,
                 `organization: ${getConfig().organizationId}`,
+                `user: ${userInfo}`,
                 `project: ${projectInfo}`,
-                `status: connected`,
+                // /auth/me is the authenticated round-trip — the honest connectivity signal
+                `status: ${meOk ? 'connected' : 'degraded — /auth/me failed (check NEXORA_API_KEY / NEXORA_API_URL)'}`,
               ].join('\n'),
             },
           ],

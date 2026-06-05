@@ -3,6 +3,12 @@ export interface AcceptanceCriterion {
   testable: boolean;
 }
 
+export interface CurrentUser {
+  id: string;
+  email: string;
+  full_name: string;
+}
+
 export interface WorkItem {
   id: string;
   organization_id: string;
