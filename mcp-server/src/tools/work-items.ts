@@ -89,7 +89,7 @@ export function registerWorkItemTools(server: any, client: NexoraClient): void {
           .describe('Initial status'),
         priority: z.number().min(0).max(4).default(2).describe('Priority: 0=critical, 4=none'),
         parent_display_id: z.string().optional().describe('Parent work item display ID (e.g., PM-10)'),
-        assigned_to_id: z.string().optional().describe('Employee UUID to assign'),
+        assigned_to_id: z.string().optional().describe('User UUID to assign (defaults to the current user; your UUID is shown by nexora_context)'),
         due_date: z.string().optional().describe('Due date (YYYY-MM-DD)'),
         estimated_hours: z.number().optional().describe('Estimated hours'),
         tags: z.string().optional().describe('Comma-separated tags'),
@@ -146,7 +146,7 @@ export function registerWorkItemTools(server: any, client: NexoraClient): void {
           .enum(['task', 'bug', 'story', 'epic', 'feature'])
           .optional()
           .describe('Filter by type'),
-        assigned_to_id: z.string().optional().describe('Filter by assignee UUID'),
+        assigned_to_id: z.string().optional().describe('Filter by assignee user UUID'),
         stream_id: z.string().optional().describe('Filter by stream UUID'),
         limit: z.number().min(1).max(200).default(50).describe('Results per page'),
         offset: z.number().min(0).default(0).describe('Offset for pagination'),
@@ -210,7 +210,7 @@ export function registerWorkItemTools(server: any, client: NexoraClient): void {
           .optional()
           .describe('New status'),
         priority: z.number().min(0).max(4).optional().describe('New priority'),
-        assigned_to_id: z.string().optional().describe('New assignee UUID'),
+        assigned_to_id: z.string().optional().describe('New assignee user UUID (see nexora_context for your own)'),
         due_date: z.string().optional().describe('New due date (YYYY-MM-DD)'),
         estimated_hours: z.number().optional().describe('New estimated hours'),
         tags: z.string().optional().describe('New comma-separated tags'),
