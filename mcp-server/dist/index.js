@@ -21074,7 +21074,7 @@ var NexoraClient = class {
   timeoutMs;
   projectCode;
   displayIdCache = /* @__PURE__ */ new Map();
-  currentUserIdCache;
+  currentUserCache;
   constructor(config2) {
     this.baseUrl = config2.apiUrl;
     this.apiKey = config2.apiKey;
@@ -21114,15 +21114,23 @@ var NexoraClient = class {
     this.projectIdCache = match.id;
     return match.id;
   }
+  async getMe() {
+    if (this.currentUserCache) return this.currentUserCache;
+    const me = await this.get("/auth/me");
+    if (!me?.id || typeof me.email !== "string" || typeof me.full_name !== "string") {
+      throw new NexoraApiError(
+        "/auth/me returned an unexpected shape (id/email/full_name required)",
+        502,
+        "BAD_ME_RESPONSE"
+      );
+    }
+    this.currentUserCache = me;
+    return me;
+  }
   async resolveCurrentUserId() {
-    if (this.currentUserIdCache) return this.currentUserIdCache;
     try {
-      const me = await this.get("/me");
-      const userId = me.employee_id ?? me.id;
-      if (userId) {
-        this.currentUserIdCache = userId;
-      }
-      return this.currentUserIdCache;
+      const me = await this.getMe();
+      return me.id;
     } catch {
       return void 0;
     }
@@ -23872,7 +23880,7 @@ function registerWorkItemTools(server, client) {
         status: external_exports.enum(["backlog", "todo", "in_progress", "in_review", "completed", "wont_do"]).default("todo").describe("Initial status"),
         priority: external_exports.number().min(0).max(4).default(2).describe("Priority: 0=critical, 4=none"),
         parent_display_id: external_exports.string().optional().describe("Parent work item display ID (e.g., PM-10)"),
-        assigned_to_id: external_exports.string().optional().describe("Employee UUID to assign"),
+        assigned_to_id: external_exports.string().optional().describe("User UUID to assign (defaults to the current user; your UUID is shown by nexora_context)"),
         due_date: external_exports.string().optional().describe("Due date (YYYY-MM-DD)"),
         estimated_hours: external_exports.number().optional().describe("Estimated hours"),
         tags: external_exports.string().optional().describe("Comma-separated tags"),
@@ -23918,7 +23926,7 @@ ${formatWorkItem(item)}`);
       inputSchema: {
         status: external_exports.enum(["backlog", "todo", "in_progress", "in_review", "completed", "wont_do"]).optional().describe("Filter by status"),
         type: external_exports.enum(["task", "bug", "story", "epic", "feature"]).optional().describe("Filter by type"),
-        assigned_to_id: external_exports.string().optional().describe("Filter by assignee UUID"),
+        assigned_to_id: external_exports.string().optional().describe("Filter by assignee user UUID"),
         stream_id: external_exports.string().optional().describe("Filter by stream UUID"),
         limit: external_exports.number().min(1).max(200).default(50).describe("Results per page"),
         offset: external_exports.number().min(0).default(0).describe("Offset for pagination")
@@ -23974,7 +23982,7 @@ ${formatWorkItem(item)}`);
         description: external_exports.string().optional().describe("New description"),
         status: external_exports.enum(["backlog", "todo", "in_progress", "in_review", "completed", "wont_do"]).optional().describe("New status"),
         priority: external_exports.number().min(0).max(4).optional().describe("New priority"),
-        assigned_to_id: external_exports.string().optional().describe("New assignee UUID"),
+        assigned_to_id: external_exports.string().optional().describe("New assignee user UUID (see nexora_context for your own)"),
         due_date: external_exports.string().optional().describe("New due date (YYYY-MM-DD)"),
         estimated_hours: external_exports.number().optional().describe("New estimated hours"),
         tags: external_exports.string().optional().describe("New comma-separated tags"),
@@ -24134,7 +24142,7 @@ ${formatWorkItemCompact(item)}${suffix}`);
 }
 
 // src/index.ts
-var VERSION = "0.10.1";
+var VERSION = "0.11.1";
 function createLazyClient() {
   let _client = null;
   return new Proxy({}, {
@@ -24166,11 +24174,21 @@ function createServer() {
     "nexora_context",
     {
       title: "Nexora Context",
-      description: "Show current Nexora MCP configuration: connected project, organization, API status. Use this to verify the connection is working.",
+      description: "Show current Nexora MCP configuration: connected project, organization, current user (name, email, user UUID \u2014 usable as assigned_to_id), API status. Use this to verify the connection is working.",
       inputSchema: {}
     },
     async () => {
       try {
+        let userInfo = "unavailable";
+        let meOk = false;
+        try {
+          const me = await client.getMe();
+          userInfo = `${me.full_name} <${me.email}>
+user_id: ${me.id}`;
+          meOk = true;
+        } catch (error2) {
+          userInfo = `unavailable \u2014 ${error2 instanceof Error ? error2.message : String(error2)}`;
+        }
         const projectCode = client.currentProjectCode;
         let projectInfo = "No default project configured";
         if (projectCode) {
@@ -24199,8 +24217,10 @@ function createServer() {
                 "# Nexora MCP Context",
                 `api: ${getConfig().apiUrl}`,
                 `organization: ${getConfig().organizationId}`,
+                `user: ${userInfo}`,
                 `project: ${projectInfo}`,
-                `status: connected`
+                // /auth/me is the authenticated round-trip — the honest connectivity signal
+                `status: ${meOk ? "connected" : "degraded \u2014 /auth/me failed (check NEXORA_API_KEY / NEXORA_API_URL)"}`
               ].join("\n")
             }
           ]
