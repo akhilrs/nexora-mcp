@@ -24226,7 +24226,11 @@ ${formatWorkItemCompact(item)}${suffix}`);
           return toolResult("Error: provide at least one of status, priority, assignee_id or comment.", true);
         }
         const projectId = await client.requireProjectId();
-        const displayIds = [...new Set(params.ids.map((d) => d.trim()).filter(Boolean))];
+        const displayIds = [
+          ...new Map(
+            params.ids.map((d) => d.trim()).filter(Boolean).map((d) => [d.toUpperCase(), d])
+          ).values()
+        ];
         if (displayIds.length === 0) return toolResult("Error: ids is empty.", true);
         const resolved = await resolveBatchItems(client, projectId, displayIds);
         const rows = /* @__PURE__ */ new Map();
@@ -24247,9 +24251,8 @@ ${formatWorkItemCompact(item)}${suffix}`);
             eligible.push(item);
           }
         }
-        const rowOf = (item) => rows.get(
-          displayIds.find((d) => d.toUpperCase() === item.display_id.toUpperCase()) ?? item.display_id
-        );
+        const rowByKey = new Map([...rows.entries()].map(([d, r]) => [d.toUpperCase(), r]));
+        const rowOf = (item) => rowByKey.get(item.display_id.toUpperCase());
         const updated = [];
         let fallbackNote = "";
         if (!hasFields) {
@@ -24283,6 +24286,15 @@ Bulk endpoint rejected the batch (${errText(error2)}); items were updated one by
                 row.update = `failed: ${errText(e)}`;
                 row.comment = params.comment !== void 0 ? "skipped" : "";
               }
+            }
+          }
+          const returned = new Set(done.map((i) => i.id));
+          for (const item of eligible) {
+            if (returned.has(item.id)) continue;
+            const row = rowOf(item);
+            if (row.update === "") {
+              row.update = "no result returned";
+              if (params.comment !== void 0) row.comment = "skipped";
             }
           }
           updated.push(...done);

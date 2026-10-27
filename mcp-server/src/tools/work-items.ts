@@ -70,7 +70,6 @@ async function applyAutoTimer(
   }
 }
 
-
 const BATCH_MAX_IDS = 100;
 const BATCH_PAGE_SIZE = 200;
 const BATCH_MAX_PAGES = 5;
@@ -474,7 +473,12 @@ export function registerWorkItemTools(server: any, client: NexoraClient): void {
         // No active project -> throws here, before any HTTP call.
         const projectId = await client.requireProjectId();
 
-        const displayIds = [...new Set(params.ids.map((d) => d.trim()).filter(Boolean))];
+        // Dedupe on the upper-cased id: lookup is case-insensitive, so "pm-1" and "PM-1" are one item.
+        const displayIds = [
+          ...new Map(
+            params.ids.map((d) => d.trim()).filter(Boolean).map((d) => [d.toUpperCase(), d] as const),
+          ).values(),
+        ];
         if (displayIds.length === 0) return toolResult('Error: ids is empty.', true);
         const resolved = await resolveBatchItems(client, projectId, displayIds);
 
@@ -496,9 +500,8 @@ export function registerWorkItemTools(server: any, client: NexoraClient): void {
             eligible.push(item);
           }
         }
-        const rowOf = (item: WorkItem): BatchOutcomeRow => rows.get(
-          displayIds.find((d) => d.toUpperCase() === item.display_id.toUpperCase()) ?? item.display_id,
-        )!;
+        const rowByKey = new Map([...rows.entries()].map(([d, r]) => [d.toUpperCase(), r]));
+        const rowOf = (item: WorkItem): BatchOutcomeRow => rowByKey.get(item.display_id.toUpperCase())!;
 
         // ---- field update: one atomic /bulk call, item-by-item only on a contract rejection
         const updated: WorkItem[] = [];
@@ -518,7 +521,6 @@ export function registerWorkItemTools(server: any, client: NexoraClient): void {
 
           const oldStatus = new Map(eligible.map((i) => [i.id, i.status]));
           const done: WorkItem[] = [];
-          
           try {
             done.push(...(await client.bulkUpdateWorkItems(projectId, body)));
             for (const item of done) rowOf(item).update = 'updated';
@@ -535,6 +537,16 @@ export function registerWorkItemTools(server: any, client: NexoraClient): void {
                 row.update = `failed: ${errText(e)}`;
                 row.comment = params.comment !== undefined ? 'skipped' : '';
               }
+            }
+          }
+          // /bulk is all-or-nothing, but never trust a short response: flag items it did not return.
+          const returned = new Set(done.map((i) => i.id));
+          for (const item of eligible) {
+            if (returned.has(item.id)) continue;
+            const row = rowOf(item);
+            if (row.update === '') {
+              row.update = 'no result returned';
+              if (params.comment !== undefined) row.comment = 'skipped';
             }
           }
           updated.push(...done);
