@@ -7,7 +7,7 @@ Load complete session context before starting work. Call this at the start of an
 
 ## Execution
 
-Call the following tools in order. If any tool call fails, note the error inline under that section and continue — do not abort the whole command.
+The five sections below are independent reads: issue all five tool calls in the same message (parallel). Present the sections in the order listed. If any tool call fails, note the error inline under that section and continue — do not abort the whole command.
 
 Record the current time as the `as-of` timestamp before calling any tools.
 

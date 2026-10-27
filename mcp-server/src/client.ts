@@ -1,5 +1,11 @@
 import type { NexoraConfig } from './config.js';
-import type { CurrentUser } from './types.js';
+import type {
+  BulkCommentItem,
+  BulkCommentResponse,
+  BulkUpdateBody,
+  CurrentUser,
+  WorkItem,
+} from './types.js';
 import {
   AuthenticationError,
   ForbiddenError,
@@ -207,6 +213,28 @@ export class NexoraClient {
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  /**
+   * POST /work-items/bulk — atomic: one bad id/assignee rejects the whole batch.
+   * Returns the updated items.
+   */
+  async bulkUpdateWorkItems(projectId: string, body: BulkUpdateBody): Promise<WorkItem[]> {
+    return this.post<WorkItem[]>(this.workItemsPath(projectId, 'bulk'), body);
+  }
+
+  /**
+   * POST /work-items/bulk-comments — partial success: per-item `error` is set for
+   * items that failed, the rest persist. A 404/405 on the route itself means the
+   * backend predates the endpoint.
+   */
+  async bulkCreateComments(
+    projectId: string,
+    items: BulkCommentItem[],
+  ): Promise<BulkCommentResponse> {
+    return this.post<BulkCommentResponse>(this.workItemsPath(projectId, 'bulk-comments'), {
+      items,
+    });
   }
 
   async resolveDisplayId(displayId: string, projectId: string): Promise<string> {
@@ -512,4 +540,22 @@ export class NexoraClient {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * The only /work-items/bulk rejections that mean "this batch cannot apply as one
+ * unit" and so justify retrying item by item. Matched on status AND detail text;
+ * anything else (401, other 400/403/404, 422, 5xx, timeouts) is a real failure and
+ * must not be papered over by a fallback.
+ */
+const BULK_CONTRACT_ERRORS: ReadonlyArray<readonly [number, string]> = [
+  [404, 'One or more work items not found in this project'],
+  [400, 'Cannot bulk update archived work items'],
+  [400, 'assigned_to_id is not a member of this project'],
+  [403, 'You can only modify work items you created'],
+];
+
+export function isBulkContractError(error: unknown): boolean {
+  if (!(error instanceof NexoraApiError)) return false;
+  return BULK_CONTRACT_ERRORS.some(([status, msg]) => error.status === status && error.message === msg);
 }

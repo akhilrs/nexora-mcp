@@ -16,6 +16,8 @@ Call `nexora_work_item_ready` to get unblocked todo items.
 If no items: report "All done — no ready items" and stop.
 
 ### 2. Select Task
+The reads below are independent: issue them in the same message (parallel). Calls that need a previous result (e.g. the transition after the comment) stay sequential.
+
 Pick the highest priority item (lowest number = highest priority).
 Call `nexora_work_item_show` to get full context.
 Call `nexora_dep_list` to understand dependencies.
@@ -47,6 +49,8 @@ Call `nexora_comment_add` with a human-readable completion note:
 - Any follow-up work identified
 
 Call `nexora_work_item_transition` to set status to `completed`.
+The timer stop, activity and comment calls are independent and may be issued together; the transition must wait until the comment succeeded.
+When closing several items with the same note, call `nexora_work_item_batch_update` (status + comment) once instead.
 
 ### 7. Next
 Call `nexora_work_item_ready` to check for newly unblocked items.

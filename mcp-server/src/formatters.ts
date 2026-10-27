@@ -105,3 +105,22 @@ export function formatAttachment(a: Attachment): string {
     `  created: ${esc(created)}`,
   ].join('\n');
 }
+
+export interface BatchOutcomeRow {
+  display_id: string;
+  update: string;
+  comment: string;
+  notes: string[];
+}
+
+/** Per-item outcome table for nexora_work_item_batch_update. Free text goes through esc(). */
+export function formatBatchOutcomeTable(rows: BatchOutcomeRow[]): string {
+  const cell = (v: string): string => esc(v).replace(/\|/g, '\\|');
+  const lines = ['| item | update | comment | notes |', '|---|---|---|---|'];
+  for (const r of rows) {
+    lines.push(
+      `| ${cell(r.display_id)} | ${cell(r.update)} | ${cell(r.comment)} | ${cell(r.notes.join('; '))} |`,
+    );
+  }
+  return lines.join('\n');
+}

@@ -17,6 +17,7 @@ Break down an implementation plan into work items in the active project.
    - Create an Epic for the overall feature (nexora_work_item_create type=epic)
    - Create Stories for major components (nexora_work_item_create type=story parent_display_id=<epic>)
    - Create Tasks for specific implementation steps (nexora_work_item_create type=task parent_display_id=<story>)
+   Creating a parent before its children is sequential (children need `parent_display_id`); sibling items under the same parent are independent and may be created in parallel in one message.
 4. Add dependencies between tasks where order matters (nexora_dep_add)
 5. Show the created hierarchy with `nexora_work_item_children` on the epic
 6. Show ready items with `nexora_work_item_ready`

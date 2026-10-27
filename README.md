@@ -53,9 +53,9 @@ The MCP server walks up from the current directory to find this file (like `.git
 /nexora:done PM-42     # complete with summary
 ```
 
-## Tools (30)
+## Tools (31)
 
-### Work Items (8)
+### Work Items (9)
 | Tool | Description |
 |------|-------------|
 | `nexora_work_item_create` | Create task, bug, story, epic, or feature |
@@ -66,6 +66,7 @@ The MCP server walks up from the current directory to find this file (like `.git
 | `nexora_work_item_ready` | Unblocked todo items |
 | `nexora_work_item_children` | List children of a parent |
 | `nexora_work_item_transition` | Change status |
+| `nexora_work_item_batch_update` | Same status/priority/assignee/comment on up to 100 items (display IDs); per-item outcome table |
 
 ### Dependencies (3)
 | Tool | Description |
@@ -128,6 +129,21 @@ Or via env: `NEXORA_TIMER_AUTO_TRACK=false`.
 |------|-------------|
 | `nexora_context` | Connection status + project info |
 | `nexora_quickstart` | Workflow guide |
+
+### Batch updates and parallel calls
+
+`nexora_work_item_batch_update {ids (<=100 display IDs), status?, priority? (0-4), assignee_id? (user UUID), comment?, is_internal?}`
+applies one change to many items and returns a per-item table (update result, comment result, notes).
+IDs are resolved by paging the project list (active, then archived; at most 5 pages of 200 each);
+unresolvable or archived IDs are reported and skipped. The field change goes through the atomic
+`POST /work-items/bulk`; if it is rejected with one of its four item-level errors (not found, archived,
+assignee not a member, not the creator) the items are retried one by one. Auto-timer is applied per item and
+never fails the batch. The comment goes through `POST /work-items/bulk-comments` and is reported
+separately; an older backend without that endpoint yields "backend not upgraded". See `docs/mcp-batch-writes.md`
+in the Nexora repo for the smoke record.
+
+Independent tool calls (reads, or writes to unrelated items) should be issued in one message so they run in
+parallel; a call that needs an earlier call's result is never parallelised.
 
 ## Slash Commands
 

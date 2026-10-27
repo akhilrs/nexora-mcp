@@ -28,6 +28,7 @@ export interface WorkItem {
   tags: string[] | null;
   acceptance_criteria: AcceptanceCriterion[] | null;
   completed_at: string | null;
+  is_archived?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -60,6 +61,30 @@ export interface Comment {
   is_internal: boolean;
   created_at: string;
   updated_at: string;
+}
+
+export interface BulkCommentItem {
+  work_item_id: string;
+  content: string;
+  is_internal?: boolean;
+}
+
+export interface BulkCommentResult {
+  index: number;
+  work_item_id: string;
+  comment: Comment | null;
+  error: string | null;
+}
+
+export interface BulkCommentResponse {
+  results: BulkCommentResult[];
+}
+
+export interface BulkUpdateBody {
+  ids: string[];
+  status?: WorkItem['status'];
+  priority?: number;
+  assigned_to_id?: string;
 }
 
 export interface Project {

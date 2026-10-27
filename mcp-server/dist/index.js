@@ -21222,6 +21222,23 @@ var NexoraClient = class {
       clearTimeout(timer);
     }
   }
+  /**
+   * POST /work-items/bulk — atomic: one bad id/assignee rejects the whole batch.
+   * Returns the updated items.
+   */
+  async bulkUpdateWorkItems(projectId, body) {
+    return this.post(this.workItemsPath(projectId, "bulk"), body);
+  }
+  /**
+   * POST /work-items/bulk-comments — partial success: per-item `error` is set for
+   * items that failed, the rest persist. A 404/405 on the route itself means the
+   * backend predates the endpoint.
+   */
+  async bulkCreateComments(projectId, items) {
+    return this.post(this.workItemsPath(projectId, "bulk-comments"), {
+      items
+    });
+  }
   async resolveDisplayId(displayId, projectId) {
     const cacheKey = `${projectId}:${displayId}`;
     const cached2 = this.displayIdCache.get(cacheKey);
@@ -21476,6 +21493,16 @@ var NexoraClient = class {
 };
 function sleep(ms) {
   return new Promise((resolve2) => setTimeout(resolve2, ms));
+}
+var BULK_CONTRACT_ERRORS = [
+  [404, "One or more work items not found in this project"],
+  [400, "Cannot bulk update archived work items"],
+  [400, "assigned_to_id is not a member of this project"],
+  [403, "You can only modify work items you created"]
+];
+function isBulkContractError(error2) {
+  if (!(error2 instanceof NexoraApiError)) return false;
+  return BULK_CONTRACT_ERRORS.some(([status, msg]) => error2.status === status && error2.message === msg);
 }
 
 // src/config.ts
@@ -22517,6 +22544,16 @@ function formatAttachment(a) {
     `  uploaded_by: ${esc2(a.uploaded_by_id)}`,
     `  created: ${esc2(created)}`
   ].join("\n");
+}
+function formatBatchOutcomeTable(rows) {
+  const cell = (v) => esc2(v).replace(/\|/g, "\\|");
+  const lines = ["| item | update | comment | notes |", "|---|---|---|---|"];
+  for (const r of rows) {
+    lines.push(
+      `| ${cell(r.display_id)} | ${cell(r.update)} | ${cell(r.comment)} | ${cell(r.notes.join("; "))} |`
+    );
+  }
+  return lines.join("\n");
 }
 
 // src/tools/attachments.ts
@@ -23863,6 +23900,35 @@ async function applyAutoTimer(client, projectId, workItemId, oldStatus, newStatu
     return `auto-timer: skipped \u2014 ${msg}`;
   }
 }
+var BATCH_MAX_IDS = 100;
+var BATCH_PAGE_SIZE = 200;
+var BATCH_MAX_PAGES = 5;
+async function resolveBatchItems(client, projectId, displayIds) {
+  const wanted = new Set(displayIds.map((d) => d.toUpperCase()));
+  const found = /* @__PURE__ */ new Map();
+  for (const showArchived of [false, true]) {
+    if (found.size === wanted.size) break;
+    for (let page = 0; page < BATCH_MAX_PAGES; page++) {
+      const items = await client.get(
+        client.workItemsPath(projectId),
+        cleanQuery({
+          limit: BATCH_PAGE_SIZE,
+          offset: page * BATCH_PAGE_SIZE,
+          show_archived: showArchived ? "true" : void 0
+        })
+      );
+      for (const item of items) {
+        const key = item.display_id.toUpperCase();
+        if (wanted.has(key) && !found.has(key)) found.set(key, item);
+      }
+      if (items.length < BATCH_PAGE_SIZE || found.size === wanted.size) break;
+    }
+  }
+  return found;
+}
+function errText(error2) {
+  return error2 instanceof Error ? error2.message : String(error2);
+}
 var acceptanceCriterionSchema = external_exports.object({
   criterion: external_exports.string().describe("The acceptance criterion text"),
   testable: external_exports.boolean().default(true).describe("Whether this criterion is testable")
@@ -24134,6 +24200,125 @@ ${formatWorkItem(item)}${suffix}`);
 ${timerNote}` : "";
         return toolResult(`${display_id}: ${status}
 ${formatWorkItemCompact(item)}${suffix}`);
+      } catch (error2) {
+        return errorResult(error2);
+      }
+    }
+  );
+  server.registerTool(
+    "nexora_work_item_batch_update",
+    {
+      title: "Batch Update Work Items",
+      description: "Apply the SAME change (status, priority, assignee and/or one comment) to up to 100 work items in the active project in one call; returns a per-item outcome table. Use it instead of many nexora_work_item_transition / nexora_work_item_update / nexora_comment_add calls with identical values. Items with different values, or calls that depend on each other, stay separate calls.",
+      inputSchema: {
+        ids: external_exports.array(external_exports.string()).min(1).max(BATCH_MAX_IDS).describe('Work item display IDs (e.g., ["PM-42", "PM-43"]), at most 100'),
+        status: external_exports.enum(["backlog", "todo", "in_progress", "in_review", "completed", "wont_do"]).optional().describe("New status for every item"),
+        priority: external_exports.number().int().min(0).max(4).optional().describe("New priority: 0=critical, 4=none"),
+        assignee_id: external_exports.string().uuid().optional().describe("New assignee user UUID"),
+        comment: external_exports.string().min(1).optional().describe("Comment added to every updated item (markdown)"),
+        is_internal: external_exports.boolean().default(true).describe("Mark the comment internal")
+      }
+    },
+    async (params) => {
+      try {
+        const hasFields = params.status !== void 0 || params.priority !== void 0 || params.assignee_id !== void 0;
+        if (!hasFields && params.comment === void 0) {
+          return toolResult("Error: provide at least one of status, priority, assignee_id or comment.", true);
+        }
+        const projectId = await client.requireProjectId();
+        const displayIds = [...new Set(params.ids.map((d) => d.trim()).filter(Boolean))];
+        if (displayIds.length === 0) return toolResult("Error: ids is empty.", true);
+        const resolved = await resolveBatchItems(client, projectId, displayIds);
+        const rows = /* @__PURE__ */ new Map();
+        const eligible = [];
+        for (const d of displayIds) {
+          const row = { display_id: d, update: "", comment: "", notes: [] };
+          rows.set(d, row);
+          const item = resolved.get(d.toUpperCase());
+          if (!item) {
+            row.update = "not found";
+            row.comment = params.comment !== void 0 ? "skipped" : "";
+            row.notes.push(`not in the first ${BATCH_MAX_PAGES * BATCH_PAGE_SIZE} active or archived items`);
+          } else if (item.is_archived === true) {
+            row.update = "archived (skipped)";
+            row.comment = params.comment !== void 0 ? "skipped" : "";
+          } else {
+            row.display_id = item.display_id;
+            eligible.push(item);
+          }
+        }
+        const rowOf = (item) => rows.get(
+          displayIds.find((d) => d.toUpperCase() === item.display_id.toUpperCase()) ?? item.display_id
+        );
+        const updated = [];
+        let fallbackNote = "";
+        if (!hasFields) {
+          for (const item of eligible) {
+            rowOf(item).update = "unchanged";
+            updated.push(item);
+          }
+        } else if (eligible.length > 0) {
+          const body = { ids: eligible.map((i) => i.id) };
+          if (params.status !== void 0) body.status = params.status;
+          if (params.priority !== void 0) body.priority = params.priority;
+          if (params.assignee_id !== void 0) body.assigned_to_id = params.assignee_id;
+          const patchBody = { ...body };
+          delete patchBody.ids;
+          const oldStatus = new Map(eligible.map((i) => [i.id, i.status]));
+          const done = [];
+          try {
+            done.push(...await client.bulkUpdateWorkItems(projectId, body));
+            for (const item of done) rowOf(item).update = "updated";
+          } catch (error2) {
+            if (!isBulkContractError(error2)) throw error2;
+            fallbackNote = `
+Bulk endpoint rejected the batch (${errText(error2)}); items were updated one by one.`;
+            for (const item of eligible) {
+              const row = rowOf(item);
+              try {
+                done.push(await client.patch(client.workItemsPath(projectId, item.id), patchBody));
+                row.update = "updated";
+                row.notes.push("fallback: per-item");
+              } catch (e) {
+                row.update = `failed: ${errText(e)}`;
+                row.comment = params.comment !== void 0 ? "skipped" : "";
+              }
+            }
+          }
+          updated.push(...done);
+          for (const item of done) {
+            const before = oldStatus.get(item.id);
+            if (params.status === void 0 || before === void 0) continue;
+            const note = await applyAutoTimer(client, projectId, item.id, before, item.status);
+            if (note) rowOf(item).notes.push(note);
+          }
+        }
+        let commentSummary = "";
+        if (params.comment !== void 0 && updated.length > 0) {
+          const items = updated.map((i) => ({
+            work_item_id: i.id,
+            content: params.comment,
+            is_internal: params.is_internal
+          }));
+          try {
+            const res = await client.bulkCreateComments(projectId, items);
+            const byId = new Map(res.results.map((r) => [r.work_item_id, r]));
+            for (const item of updated) {
+              const r = byId.get(item.id);
+              rowOf(item).comment = r?.comment ? "added" : `failed: ${r?.error ?? "no result returned"}`;
+            }
+          } catch (error2) {
+            const missing = error2 instanceof NexoraApiError && (error2.status === 404 || error2.status === 405);
+            const msg = missing ? "backend not upgraded (no bulk-comments endpoint)" : `failed: ${errText(error2)}`;
+            for (const item of updated) rowOf(item).comment = msg;
+            commentSummary = `
+Comments: ${msg}. Field updates above were applied.`;
+          }
+        }
+        const table = formatBatchOutcomeTable([...rows.values()]);
+        const ok = [...rows.values()].filter((r) => r.update === "updated" || r.update === "unchanged").length;
+        return toolResult(`# Batch update \u2014 ${ok}/${displayIds.length} items
+${table}${fallbackNote}${commentSummary}`);
       } catch (error2) {
         return errorResult(error2);
       }

@@ -7,6 +7,8 @@ Show current project status: active items, timer, stats.
 
 ## Execution
 
+The four calls below are independent reads: issue them in the same message (parallel), then summarize.
+
 1. Call `nexora_context` to show connection info
 2. Call `nexora_timer_status` to check for active timer
 3. Call `nexora_work_item_list` with status=in_progress to show active work
